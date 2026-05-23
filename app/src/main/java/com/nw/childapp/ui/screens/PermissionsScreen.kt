@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/ui/screens/PermissionsScreen.kt
+// PATH: app/src/main/java/com/nw/childapp/ui/screens/PermissionsScreen.kt
 package com.nw.childapp.ui.screens
 
 import android.os.Build
@@ -36,7 +36,6 @@ fun PermissionsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
-    // Auto-advance when every permission is granted
     LaunchedEffect(uiState.allPermissionsGranted) {
         if (uiState.allPermissionsGranted) onAllGranted()
     }
@@ -85,15 +84,20 @@ fun PermissionsScreen(
                 Column(Modifier.padding(16.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Permissions granted", fontSize = 13.sp, color = ChildOnSurface)
-                        Text("$granted / $total", fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            color = if (missing.isEmpty()) ChildSuccess else ChildWarning)
+                        Text(
+                            "$granted / $total",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (missing.isEmpty()) ChildSuccess else ChildWarning
+                        )
                     }
                     Spacer(Modifier.height(10.dp))
+                    // Fixed: use progress as Float directly (not lambda)
                     LinearProgressIndicator(
-                        progress          = { granted.toFloat() / total },
-                        modifier          = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                        color             = if (missing.isEmpty()) ChildSuccess else ChildWarning,
-                        trackColor        = ChildSurface
+                        progress  = granted.toFloat() / total,
+                        modifier  = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                        color     = if (missing.isEmpty()) ChildSuccess else ChildWarning,
+                        trackColor = ChildSurface
                     )
                 }
             }
@@ -133,7 +137,7 @@ fun PermissionsScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Refresh & Continue
+            // Refresh & Continue button
             Button(
                 onClick  = { viewModel.refreshPermissions() },
                 modifier = Modifier.fillMaxWidth().height(54.dp),
@@ -158,17 +162,18 @@ fun PermissionsScreen(
     }
 }
 
-// ── Grant dispatcher ──────────────────────────────────────────────────
-
 private fun grantItem(
     item: PermissionItem,
     requestRuntime: (Array<String>) -> Unit,
     openSettings: (String) -> Unit
 ) {
     when (item) {
-        PermissionItem.CAMERA -> requestRuntime(arrayOf(android.Manifest.permission.CAMERA))
-        PermissionItem.MICROPHONE -> requestRuntime(arrayOf(android.Manifest.permission.RECORD_AUDIO))
-        PermissionItem.CONTACTS -> requestRuntime(arrayOf(android.Manifest.permission.READ_CONTACTS))
+        PermissionItem.CAMERA ->
+            requestRuntime(arrayOf(android.Manifest.permission.CAMERA))
+        PermissionItem.MICROPHONE ->
+            requestRuntime(arrayOf(android.Manifest.permission.RECORD_AUDIO))
+        PermissionItem.CONTACTS ->
+            requestRuntime(arrayOf(android.Manifest.permission.READ_CONTACTS))
         PermissionItem.STORAGE -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 requestRuntime(arrayOf(
@@ -183,13 +188,9 @@ private fun grantItem(
         PermissionItem.NOTIFICATIONS -> openSettings("notification_listener")
         PermissionItem.ACCESSIBILITY -> openSettings("accessibility")
         PermissionItem.USAGE_STATS   -> openSettings("usage_access")
-        PermissionItem.SCREEN_SHARE  -> {
-            // No pre-grant needed; MediaProjection is requested live by ScreenCaptureService
-        }
+        PermissionItem.SCREEN_SHARE  -> { /* MediaProjection requested at runtime */ }
     }
 }
-
-// ── Permission card composable ────────────────────────────────────────
 
 @Composable
 private fun PermCard(
@@ -249,10 +250,10 @@ private fun PermCard(
             if (!isGranted) {
                 Spacer(Modifier.width(10.dp))
                 Button(
-                    onClick          = onGrant,
-                    shape            = RoundedCornerShape(10.dp),
-                    colors           = ButtonDefaults.buttonColors(containerColor = ChildAccent),
-                    contentPadding   = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                    onClick        = onGrant,
+                    shape          = RoundedCornerShape(10.dp),
+                    colors         = ButtonDefaults.buttonColors(containerColor = ChildAccent),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                 ) {
                     Text("Grant", fontSize = 12.sp, color = Color(0xFF003300), fontWeight = FontWeight.Bold)
                 }

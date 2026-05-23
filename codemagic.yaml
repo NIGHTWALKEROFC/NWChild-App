@@ -1,0 +1,89 @@
+workflows:
+  nw-child-app:
+    name: NW Child App
+    max_build_duration: 60
+    environment:
+      java: 17
+      groups:
+        - google_credentials
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: Write google-services.json
+        script: |
+          echo "$CHILD_GOOGLE_SERVICES" > "$CM_BUILD_DIR/app/google-services.json"
+
+      - name: Set up local.properties
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
+
+      - name: Create launcher icons
+        script: |
+          for dpi in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p "$CM_BUILD_DIR/app/src/main/res/mipmap-${dpi}"
+            case $dpi in
+              mdpi)    size=48  ;;
+              hdpi)    size=72  ;;
+              xhdpi)   size=96  ;;
+              xxhdpi)  size=144 ;;
+              xxxhdpi) size=192 ;;
+            esac
+            python3 -c "
+          import struct, zlib
+          def create_png(size, r, g, b):
+              def chunk(name, data):
+                  c = zlib.crc32(name + data) & 0xffffffff
+                  return struct.pack('>I', len(data)) + name + data + struct.pack('>I', c)
+              ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+              raw = b''
+              for y in range(size):
+                  raw += b'\x00'
+                  for x in range(size):
+                      cx, cy = x - size//2, y - size//2
+                      dist = (cx*cx + cy*cy) ** 0.5
+                      if dist < size*0.45:
+                          raw += bytes([r, g, b])
+                      else:
+                          raw += bytes([13, 31, 14])
+              idat = chunk(b'IDAT', zlib.compress(raw))
+              iend = chunk(b'IEND', b'')
+              return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+          data = create_png($size, 105, 240, 174)
+          with open('icon.png', 'wb') as f:
+              f.write(data)
+          "
+            cp icon.png "$CM_BUILD_DIR/app/src/main/res/mipmap-${dpi}/ic_launcher.png"
+            cp icon.png "$CM_BUILD_DIR/app/src/main/res/mipmap-${dpi}/ic_launcher_round.png"
+          done
+
+      - name: Generate gradlew
+        script: |
+          cd $CM_BUILD_DIR
+          gradle wrapper
+
+      - name: Make gradlew executable
+        script: |
+          cd $CM_BUILD_DIR
+          chmod +x gradlew
+
+      - name: Build Debug APK
+        script: |
+          cd $CM_BUILD_DIR
+          ./gradlew assembleDebug
+
+    artifacts:
+      - app/build/outputs/apk/debug/app-debug.apk
+
+    publishing:
+      email:
+        recipients:
+          - rinshan602@gmail.com
+        notify:
+          success: true
+          failure: true

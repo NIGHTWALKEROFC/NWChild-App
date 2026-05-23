@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PATH: nw-child-app/app/src/main/res/values/themes.xml -->
+<resources>
+    <style name="Theme.NWChild" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

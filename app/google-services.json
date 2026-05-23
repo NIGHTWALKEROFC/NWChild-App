@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "1057124653244",
+    "firebase_url": "https://nw-parental-control-default-rtdb.firebaseio.com",
+    "project_id": "nw-parental-control",
+    "storage_bucket": "nw-parental-control.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1057124653244:android:a911ed47ad12271b6698b9",
+        "android_client_info": {
+          "package_name": "com.nw.childapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkVwFTCGgZMT6_CwbiUJj62w_nUgpus3w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1057124653244:android:05389fa7fdce2dd16698b9",
+        "android_client_info": {
+          "package_name": "com.nw.parentalcontrol"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkVwFTCGgZMT6_CwbiUJj62w_nUgpus3w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

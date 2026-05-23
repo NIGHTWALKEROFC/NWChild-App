@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PATH: nw-child-app/app/src/main/res/values/strings.xml -->
+<resources>
+    <string name="app_name">NW Child</string>
+    <string name="accessibility_description">NW Child monitors device usage to keep children safe under parental supervision.</string>
+</resources>

@@ -1,0 +1,264 @@
+// PATH: nw-child-app/app/src/main/java/com/nw/childapp/ui/screens/PermissionsScreen.kt
+package com.nw.childapp.ui.screens
+
+import android.os.Build
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.nw.childapp.data.PermissionItem
+import com.nw.childapp.ui.theme.*
+import com.nw.childapp.viewmodel.ChildViewModel
+
+@Composable
+fun PermissionsScreen(
+    viewModel: ChildViewModel,
+    onAllGranted: () -> Unit,
+    onRequestRuntimePermissions: (Array<String>) -> Unit,
+    onOpenSettings: (String) -> Unit
+) {
+    val uiState by viewModel.uiState.collectAsState()
+
+    // Auto-advance when every permission is granted
+    LaunchedEffect(uiState.allPermissionsGranted) {
+        if (uiState.allPermissionsGranted) onAllGranted()
+    }
+
+    val perms   = uiState.permissions
+    val missing = perms.missingList()
+    val total   = PermissionItem.values().size
+    val granted = total - missing.size
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(ChildBackground, Color(0xFF040D04))))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+        ) {
+            Spacer(Modifier.height(52.dp))
+
+            // Header
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(46.dp).clip(CircleShape)
+                        .background(ChildAccent.copy(0.15f))
+                        .border(1.5.dp, ChildAccent.copy(0.5f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Default.Security, null, tint = ChildAccent, modifier = Modifier.size(24.dp)) }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Setup Required", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = ChildOnBackground)
+                    Text("Grant all permissions to continue", fontSize = 12.sp, color = ChildOnSurface)
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Progress card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape    = RoundedCornerShape(16.dp),
+                colors   = CardDefaults.cardColors(containerColor = ChildCard)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Permissions granted", fontSize = 13.sp, color = ChildOnSurface)
+                        Text("$granted / $total", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = if (missing.isEmpty()) ChildSuccess else ChildWarning)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(
+                        progress          = { granted.toFloat() / total },
+                        modifier          = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                        color             = if (missing.isEmpty()) ChildSuccess else ChildWarning,
+                        trackColor        = ChildSurface
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Missing permissions
+            if (missing.isNotEmpty()) {
+                Text("Still needed", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = ChildError, letterSpacing = 1.sp)
+                Spacer(Modifier.height(10.dp))
+                missing.forEach { item ->
+                    PermCard(
+                        item      = item,
+                        isGranted = false,
+                        onGrant   = { grantItem(item, onRequestRuntimePermissions, onOpenSettings) }
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+
+            // Granted permissions
+            AnimatedVisibility(visible = granted > 0, enter = fadeIn(tween(400)), exit = fadeOut()) {
+                Column {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Granted", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        color = ChildSuccess, letterSpacing = 1.sp)
+                    Spacer(Modifier.height(10.dp))
+                    PermissionItem.values()
+                        .filter { !missing.contains(it) }
+                        .forEach { item ->
+                            PermCard(item = item, isGranted = true, onGrant = {})
+                            Spacer(Modifier.height(8.dp))
+                        }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Refresh & Continue
+            Button(
+                onClick  = { viewModel.refreshPermissions() },
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                shape    = RoundedCornerShape(14.dp),
+                colors   = ButtonDefaults.buttonColors(
+                    containerColor = if (missing.isEmpty()) ChildAccent else ChildSurface
+                ),
+                border = if (missing.isEmpty()) null else BorderStroke(1.dp, ChildAccent.copy(0.4f))
+            ) {
+                Icon(Icons.Default.Refresh, null,
+                    tint = if (missing.isEmpty()) Color(0xFF003300) else ChildAccent)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (missing.isEmpty()) "All done — Continue" else "Refresh Permissions",
+                    fontWeight = FontWeight.Bold,
+                    color = if (missing.isEmpty()) Color(0xFF003300) else ChildOnBackground
+                )
+            }
+
+            Spacer(Modifier.height(36.dp))
+        }
+    }
+}
+
+// ── Grant dispatcher ──────────────────────────────────────────────────
+
+private fun grantItem(
+    item: PermissionItem,
+    requestRuntime: (Array<String>) -> Unit,
+    openSettings: (String) -> Unit
+) {
+    when (item) {
+        PermissionItem.CAMERA -> requestRuntime(arrayOf(android.Manifest.permission.CAMERA))
+        PermissionItem.MICROPHONE -> requestRuntime(arrayOf(android.Manifest.permission.RECORD_AUDIO))
+        PermissionItem.CONTACTS -> requestRuntime(arrayOf(android.Manifest.permission.READ_CONTACTS))
+        PermissionItem.STORAGE -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                requestRuntime(arrayOf(
+                    android.Manifest.permission.READ_MEDIA_IMAGES,
+                    android.Manifest.permission.READ_MEDIA_VIDEO,
+                    android.Manifest.permission.READ_MEDIA_AUDIO
+                ))
+            } else {
+                requestRuntime(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE))
+            }
+        }
+        PermissionItem.NOTIFICATIONS -> openSettings("notification_listener")
+        PermissionItem.ACCESSIBILITY -> openSettings("accessibility")
+        PermissionItem.USAGE_STATS   -> openSettings("usage_access")
+        PermissionItem.SCREEN_SHARE  -> {
+            // No pre-grant needed; MediaProjection is requested live by ScreenCaptureService
+        }
+    }
+}
+
+// ── Permission card composable ────────────────────────────────────────
+
+@Composable
+private fun PermCard(
+    item: PermissionItem,
+    isGranted: Boolean,
+    onGrant: () -> Unit
+) {
+    val icon: ImageVector = when (item) {
+        PermissionItem.CAMERA        -> Icons.Default.Videocam
+        PermissionItem.MICROPHONE    -> Icons.Default.Mic
+        PermissionItem.SCREEN_SHARE  -> Icons.Default.ScreenShare
+        PermissionItem.STORAGE       -> Icons.Default.Folder
+        PermissionItem.NOTIFICATIONS -> Icons.Default.Notifications
+        PermissionItem.CONTACTS      -> Icons.Default.Contacts
+        PermissionItem.ACCESSIBILITY -> Icons.Default.Accessibility
+        PermissionItem.USAGE_STATS   -> Icons.Default.BarChart
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(14.dp),
+        colors   = CardDefaults.cardColors(
+            containerColor = if (isGranted) ChildSuccess.copy(0.1f) else ChildCard
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isGranted) ChildSuccess.copy(0.4f) else ChildError.copy(0.3f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(42.dp).clip(CircleShape)
+                    .background(
+                        if (isGranted) ChildSuccess.copy(0.14f) else ChildError.copy(0.14f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null,
+                    tint = if (isGranted) ChildSuccess else ChildError,
+                    modifier = Modifier.size(22.dp))
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(item.label, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ChildOnBackground)
+                Text(item.description, fontSize = 11.sp, color = ChildOnSurface)
+                if (!isGranted && item.requiresSettings) {
+                    Spacer(Modifier.height(2.dp))
+                    Text("→ Opens system settings", fontSize = 10.sp, color = ChildWarning)
+                }
+            }
+
+            if (!isGranted) {
+                Spacer(Modifier.width(10.dp))
+                Button(
+                    onClick          = onGrant,
+                    shape            = RoundedCornerShape(10.dp),
+                    colors           = ButtonDefaults.buttonColors(containerColor = ChildAccent),
+                    contentPadding   = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text("Grant", fontSize = 12.sp, color = Color(0xFF003300), fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Icon(Icons.Default.CheckCircle, null, tint = ChildSuccess, modifier = Modifier.size(26.dp))
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/viewmodel/ChildViewModel.kt
+// PATH: app/src/main/java/com/nw/childapp/viewmodel/ChildViewModel.kt
 package com.nw.childapp.viewmodel
 
 import android.app.Application
@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.*
 import com.google.firebase.messaging.FirebaseMessaging
 import com.nw.childapp.data.*
 import com.nw.childapp.data.repository.ChildRepository
@@ -22,23 +23,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 data class ChildUiState(
-    val isPaired: Boolean           = false,
-    val isConnected: Boolean        = false,
-    val deviceId: String            = "",
-    val deviceName: String          = "",
-    val parentDeviceId: String      = "",
-    val permissions: ChildPermissions = ChildPermissions(),
-    val allPermissionsGranted: Boolean = false,
-    val isLoading: Boolean          = false,
-    val errorMessage: String?       = null,
-    val successMessage: String?     = null,
-    val updateInfo: UpdateInfo?     = null,
-    val pendingDisconnect: Boolean  = false,
-    val disconnectDenied: Boolean   = false,
-    val deleteDenied: Boolean       = false,
-    val cameraActive: Boolean       = false,
-    val micActive: Boolean          = false,
-    val screenShareActive: Boolean  = false
+    val isPaired: Boolean               = false,
+    val isConnected: Boolean            = false,
+    val deviceId: String                = "",
+    val deviceName: String              = "",
+    val parentDeviceId: String          = "",
+    val permissions: ChildPermissions   = ChildPermissions(),
+    val allPermissionsGranted: Boolean  = false,
+    val isLoading: Boolean              = false,
+    val errorMessage: String?           = null,
+    val successMessage: String?         = null,
+    val updateInfo: UpdateInfo?         = null,
+    val pendingDisconnect: Boolean      = false,
+    val disconnectDenied: Boolean       = false,
+    val deleteDenied: Boolean           = false,
+    val cameraActive: Boolean           = false,
+    val micActive: Boolean              = false,
+    val screenShareActive: Boolean      = false
 )
 
 class ChildViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,6 +54,10 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
 
     private var commandListenerJob: Job? = null
     private var permissionPollJob:  Job? = null
+    private var connectionListenerJob: Job? = null
+
+    // Firebase real-time connection listener
+    private val connectedRef = FirebaseDatabase.getInstance().getReference(".info/connected")
 
     val deviceId: String by lazy {
         prefs.getString("device_id", null) ?: run {
@@ -66,10 +71,8 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
     val deviceName: String by lazy { "${Build.MANUFACTURER} ${Build.MODEL}".trim() }
 
     init {
-        // Anonymous sign-in so Firebase security rules allow access
         FirebaseAuth.getInstance().signInAnonymously()
 
-        // Restore state if already paired
         if (prefs.getBoolean("is_paired", false)) {
             val parentId = prefs.getString("parent_device_id", "") ?: ""
             _uiState.update {
@@ -84,11 +87,33 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
             refreshPermissions()
             startCommandListener()
             startMonitorService()
+            listenToDeviceConnection()
         }
         checkForUpdates()
     }
 
-    // ── Permissions ───────────────────────────────────────────────────
+    // ── Real-time disconnect listener ─────────────────────────────────
+    // This listens directly to Firebase device node so disconnect
+    // is reflected instantly without needing app restart
+    private fun listenToDeviceConnection() {
+        connectionListenerJob?.cancel()
+        connectionListenerJob = viewModelScope.launch {
+            val db = FirebaseDatabase.getInstance()
+            val deviceRef = db.getReference("devices").child(deviceId)
+            val listener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val isConnected = snapshot.child("isConnected").getValue(Boolean::class.java) ?: true
+                    if (!isConnected) {
+                        // Parent disconnected us — update UI immediately
+                        viewModelScope.launch { performDisconnect() }
+                    }
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            }
+            deviceRef.addValueEventListener(listener)
+            // Keep listener alive — cleaned up in onCleared
+        }
+    }
 
     fun refreshPermissions() {
         val perms      = PermissionHelper.checkAllPermissions(ctx)
@@ -100,8 +125,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-    // ── Pairing ───────────────────────────────────────────────────────
 
     fun submitPairingCode(code: String) {
         viewModelScope.launch {
@@ -119,7 +142,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
                             .putBoolean("is_paired", true)
                             .putString("parent_device_id", parentId)
                             .apply()
-
                         _uiState.update {
                             it.copy(
                                 isPaired       = true,
@@ -134,6 +156,7 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
                         refreshPermissions()
                         startCommandListener()
                         startMonitorService()
+                        listenToDeviceConnection()
                     },
                     onFailure = { e ->
                         _uiState.update {
@@ -146,8 +169,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-    // ── Disconnect / Delete requests ──────────────────────────────────
 
     fun requestDisconnect() {
         viewModelScope.launch {
@@ -166,8 +187,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ── Command handling ──────────────────────────────────────────────
-
     private fun startCommandListener() {
         commandListenerJob?.cancel()
         commandListenerJob = viewModelScope.launch {
@@ -177,7 +196,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Poll permissions every 5 s and report to Firebase
         permissionPollJob?.cancel()
         permissionPollJob = viewModelScope.launch {
             while (true) {
@@ -186,7 +204,6 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Mark online
         viewModelScope.launch {
             try { repo.updateOnlineStatus(deviceId, true) } catch (_: Exception) {}
         }
@@ -194,66 +211,97 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun handleCommand(cmd: ControlCommand) {
         when (cmd.type) {
-            CommandTypes.ENABLE_CAMERA      -> _uiState.update { it.copy(cameraActive = true) }
-            CommandTypes.DISABLE_CAMERA     -> _uiState.update { it.copy(cameraActive = false) }
-            CommandTypes.ENABLE_MIC         -> _uiState.update { it.copy(micActive = true) }
-            CommandTypes.DISABLE_MIC        -> _uiState.update { it.copy(micActive = false) }
-            CommandTypes.START_SCREEN_SHARE -> _uiState.update { it.copy(screenShareActive = true) }
-            CommandTypes.STOP_SCREEN_SHARE  -> _uiState.update { it.copy(screenShareActive = false) }
+            // ── Camera ────────────────────────────────────────────────
+            CommandTypes.ENABLE_CAMERA -> {
+                _uiState.update { it.copy(cameraActive = true) }
+                ctx.startForegroundService(Intent(ctx, com.nw.childapp.service.CameraStreamService::class.java))
+            }
+            CommandTypes.DISABLE_CAMERA -> {
+                _uiState.update { it.copy(cameraActive = false) }
+                ctx.stopService(Intent(ctx, com.nw.childapp.service.CameraStreamService::class.java))
+            }
 
+            // ── Microphone ───────────────────────────────────────────
+            CommandTypes.ENABLE_MIC -> {
+                _uiState.update { it.copy(micActive = true) }
+                ctx.startForegroundService(Intent(ctx, com.nw.childapp.service.MicStreamService::class.java))
+            }
+            CommandTypes.DISABLE_MIC -> {
+                _uiState.update { it.copy(micActive = false) }
+                ctx.stopService(Intent(ctx, com.nw.childapp.service.MicStreamService::class.java))
+            }
+
+            // ── Screen Share ─────────────────────────────────────────
+            CommandTypes.START_SCREEN_SHARE -> {
+                _uiState.update { it.copy(screenShareActive = true) }
+                // Broadcast to MainActivity to request MediaProjection permission
+                ctx.sendBroadcast(Intent("com.nw.childapp.START_SCREEN_SHARE"))
+            }
+            CommandTypes.STOP_SCREEN_SHARE -> {
+                _uiState.update { it.copy(screenShareActive = false) }
+                ctx.stopService(Intent(ctx, com.nw.childapp.service.ScreenCaptureService::class.java))
+            }
+
+            // ── App blocking ─────────────────────────────────────────
             CommandTypes.BLOCK_APP -> {
-                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
+                    ?.toMutableSet() ?: mutableSetOf()
                 blocked.add(cmd.value)
                 prefs.edit().putStringSet("blocked_apps", blocked).apply()
             }
             CommandTypes.UNBLOCK_APP -> {
-                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
+                    ?.toMutableSet() ?: mutableSetOf()
                 blocked.remove(cmd.value)
                 prefs.edit().putStringSet("blocked_apps", blocked).apply()
             }
+
+            // ── App time limits ──────────────────────────────────────
             CommandTypes.SET_APP_LIMIT -> {
                 val parts = cmd.value.split(":")
                 if (parts.size == 2) {
-                    val limits = prefs.getString("app_limits", "{}") ?: "{}"
-                    val entry  = "\"${parts[0]}\":${parts[1]}"
-                    val updated = if (limits == "{}") "{$entry}" else limits.replace("}", ",$entry}")
+                    val pkg   = parts[0]
+                    val mins  = parts[1].toIntOrNull() ?: return
+                    val json  = prefs.getString("app_limits", "{}") ?: "{}"
+                    val entry = "\"$pkg\":$mins"
+                    val updated = if (json == "{}") "{$entry}"
+                                  else json.replace("}", ",$entry}")
                     prefs.edit().putString("app_limits", updated).apply()
                 }
             }
 
+            // ── Disconnect ───────────────────────────────────────────
             CommandTypes.APPROVE_DISCONNECT,
-            CommandTypes.FORCE_DISCONNECT -> performDisconnect()
-
+            CommandTypes.FORCE_DISCONNECT -> {
+                viewModelScope.launch { performDisconnect() }
+            }
             CommandTypes.DENY_DISCONNECT ->
                 _uiState.update { it.copy(disconnectDenied = true, pendingDisconnect = false) }
 
-            CommandTypes.APPROVE_DELETE -> {
-                // Notify UI — user should then confirm uninstall
-                _uiState.update { it.copy(successMessage = "Delete approved by parent") }
+            // ── Delete ───────────────────────────────────────────────
+            CommandTypes.APPROVE_DELETE ->
                 ctx.sendBroadcast(Intent("com.nw.childapp.APPROVE_DELETE"))
-            }
             CommandTypes.DENY_DELETE ->
                 _uiState.update { it.copy(deleteDenied = true) }
         }
     }
 
-    private fun performDisconnect() {
-        viewModelScope.launch {
-            try { repo.markDisconnected(deviceId) } catch (_: Exception) {}
-        }
+    suspend fun performDisconnect() {
+        try { repo.markDisconnected(deviceId) } catch (_: Exception) {}
         prefs.edit().putBoolean("is_paired", false).remove("parent_device_id").apply()
         commandListenerJob?.cancel()
         permissionPollJob?.cancel()
-        ctx.stopService(Intent(ctx, ChildMonitorService::class.java))
-        _uiState.update { ChildUiState() } // reset all state
+        connectionListenerJob?.cancel()
+        try { ctx.stopService(Intent(ctx, ChildMonitorService::class.java)) } catch (_: Exception) {}
+        try { ctx.stopService(Intent(ctx, com.nw.childapp.service.CameraStreamService::class.java)) } catch (_: Exception) {}
+        try { ctx.stopService(Intent(ctx, com.nw.childapp.service.MicStreamService::class.java)) } catch (_: Exception) {}
+        try { ctx.stopService(Intent(ctx, com.nw.childapp.service.ScreenCaptureService::class.java)) } catch (_: Exception) {}
+        _uiState.update { ChildUiState() }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────
-
     private fun startMonitorService() {
-        try {
-            ctx.startForegroundService(Intent(ctx, ChildMonitorService::class.java))
-        } catch (_: Exception) {}
+        try { ctx.startForegroundService(Intent(ctx, ChildMonitorService::class.java)) }
+        catch (_: Exception) {}
     }
 
     private fun checkForUpdates() {
@@ -263,11 +311,11 @@ class ChildViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun clearError()          = _uiState.update { it.copy(errorMessage = null) }
-    fun clearSuccess()        = _uiState.update { it.copy(successMessage = null) }
-    fun dismissUpdate()       = _uiState.update { it.copy(updateInfo = null) }
+    fun clearError()            = _uiState.update { it.copy(errorMessage = null) }
+    fun clearSuccess()          = _uiState.update { it.copy(successMessage = null) }
+    fun dismissUpdate()         = _uiState.update { it.copy(updateInfo = null) }
     fun clearDisconnectDenied() = _uiState.update { it.copy(disconnectDenied = false) }
-    fun clearDeleteDenied()   = _uiState.update { it.copy(deleteDenied = false) }
+    fun clearDeleteDenied()     = _uiState.update { it.copy(deleteDenied = false) }
 
     override fun onCleared() {
         super.onCleared()

@@ -8,11 +8,11 @@ import android.os.IBinder
 import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.google.firebase.database.FirebaseDatabase
 import com.nw.childapp.data.CommandTypes
 import com.nw.childapp.data.ControlCommand
 import com.nw.childapp.data.repository.ChildRepository
 import com.nw.childapp.util.PermissionHelper
-import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.*
 
 class ChildMonitorService : Service() {
@@ -30,6 +30,7 @@ class ChildMonitorService : Service() {
             launchCommandListener()
             launchPermissionReporter()
             markOnline(true)
+            // Sync contacts immediately on start
             syncContactsToFirebase()
         }
         return START_STICKY
@@ -43,7 +44,7 @@ class ChildMonitorService : Service() {
                     handleCommand(cmd)
                 }
             } catch (e: Exception) {
-                Log.e("ChildMonitor", "Command listener error: ${e.message}")
+                Log.e("ChildMonitor", "Listener error: ${e.message}")
                 delay(5_000)
                 launchCommandListener()
             }
@@ -58,43 +59,56 @@ class ChildMonitorService : Service() {
                     repo.updatePermissions(deviceId, perms)
                     repo.updateOnlineStatus(deviceId, true)
                 } catch (e: Exception) {
-                    Log.e("ChildMonitor", "Permission report error: ${e.message}")
+                    Log.e("ChildMonitor", "Reporter error: ${e.message}")
                 }
                 delay(15_000)
             }
         }
     }
 
-    // ── Sync contacts to Firebase so parent can view them ─────────────
+    // ── Contacts sync — reads ALL contacts and uploads to Firebase ────
     private fun syncContactsToFirebase() {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
-                val contacts = mutableListOf<Map<String, String>>()
-                val cursor: Cursor? = applicationContext.contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    ),
-                    null, null,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-                )
-                cursor?.use {
-                    val nameIdx   = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                    val numberIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                    while (it.moveToNext()) {
-                        val name   = it.getString(nameIdx)   ?: continue
-                        val number = it.getString(numberIdx) ?: ""
-                        contacts.add(mapOf("name" to name, "number" to number))
+                val contactsRef = db.getReference("contacts").child(deviceId)
+
+                // First clear old data
+                contactsRef.removeValue().addOnCompleteListener {
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val cursor: Cursor? = applicationContext.contentResolver.query(
+                                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                                arrayOf(
+                                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                                    ContactsContract.CommonDataKinds.Phone.NUMBER
+                                ),
+                                null, null,
+                                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+                            )
+
+                            val batch = mutableMapOf<String, Any>()
+                            var index = 0
+
+                            cursor?.use { c ->
+                                val nameIdx   = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                                val numberIdx = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                                while (c.moveToNext()) {
+                                    val name   = c.getString(nameIdx)   ?: "Unknown"
+                                    val number = c.getString(numberIdx) ?: ""
+                                    batch["contact_$index"] = mapOf("name" to name, "number" to number)
+                                    index++
+                                }
+                            }
+
+                            if (batch.isNotEmpty()) {
+                                contactsRef.updateChildren(batch)
+                                Log.d("ChildMonitor", "Synced $index contacts to Firebase")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ChildMonitor", "Contact upload error: ${e.message}")
+                        }
                     }
                 }
-                // Upload to Firebase
-                val contactsRef = db.getReference("contacts").child(deviceId)
-                contactsRef.removeValue()
-                contacts.forEachIndexed { index, contact ->
-                    contactsRef.child("contact_$index").setValue(contact)
-                }
-                Log.d("ChildMonitor", "Synced ${contacts.size} contacts")
             } catch (e: Exception) {
                 Log.e("ChildMonitor", "Contact sync error: ${e.message}")
             }
@@ -104,58 +118,75 @@ class ChildMonitorService : Service() {
     private fun markOnline(online: Boolean) {
         scope.launch {
             try { repo.updateOnlineStatus(deviceId, online) }
-            catch (e: Exception) { Log.e("ChildMonitor", "Online status error: ${e.message}") }
+            catch (e: Exception) { Log.e("ChildMonitor", "Online error: ${e.message}") }
         }
     }
 
     private fun handleCommand(cmd: ControlCommand) {
-        Log.d("ChildMonitor", "Command: ${cmd.type} value=${cmd.value}")
+        Log.d("ChildMonitor", "CMD: ${cmd.type} = ${cmd.value}")
         when (cmd.type) {
-            CommandTypes.ENABLE_CAMERA ->
-                startForegroundService(Intent(this, CameraStreamService::class.java))
+            CommandTypes.ENABLE_CAMERA -> {
+                try { startForegroundService(Intent(this, CameraStreamService::class.java)) }
+                catch (e: Exception) { Log.e("ChildMonitor", "Camera start error: ${e.message}") }
+            }
             CommandTypes.DISABLE_CAMERA ->
                 stopService(Intent(this, CameraStreamService::class.java))
-            CommandTypes.ENABLE_MIC ->
-                startForegroundService(Intent(this, MicStreamService::class.java))
+
+            CommandTypes.ENABLE_MIC -> {
+                try { startForegroundService(Intent(this, MicStreamService::class.java)) }
+                catch (e: Exception) { Log.e("ChildMonitor", "Mic start error: ${e.message}") }
+            }
             CommandTypes.DISABLE_MIC ->
                 stopService(Intent(this, MicStreamService::class.java))
+
             CommandTypes.START_SCREEN_SHARE ->
                 sendBroadcast(Intent("com.nw.childapp.START_SCREEN_SHARE"))
             CommandTypes.STOP_SCREEN_SHARE ->
                 stopService(Intent(this, ScreenCaptureService::class.java))
+
+            // App blocking — write to prefs, accessibility service reads it
             CommandTypes.BLOCK_APP -> {
-                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
-                    ?.toMutableSet() ?: mutableSetOf()
-                blocked.add(cmd.value)
-                prefs.edit().putStringSet("blocked_apps", blocked).apply()
+                val pkg = cmd.value.trim()
+                if (pkg.isNotEmpty()) {
+                    val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
+                        ?.toMutableSet() ?: mutableSetOf()
+                    blocked.add(pkg)
+                    prefs.edit().putStringSet("blocked_apps", blocked).apply()
+                    Log.d("ChildMonitor", "Blocked: $pkg — total: ${blocked.size}")
+                    // Also store in Firebase for parent confirmation
+                    db.getReference("blocked_apps").child(deviceId).child(pkg).setValue(true)
+                }
             }
             CommandTypes.UNBLOCK_APP -> {
-                val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
-                    ?.toMutableSet() ?: mutableSetOf()
-                blocked.remove(cmd.value)
-                prefs.edit().putStringSet("blocked_apps", blocked).apply()
+                val pkg = cmd.value.trim()
+                if (pkg.isNotEmpty()) {
+                    val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
+                        ?.toMutableSet() ?: mutableSetOf()
+                    blocked.remove(pkg)
+                    prefs.edit().putStringSet("blocked_apps", blocked).apply()
+                    Log.d("ChildMonitor", "Unblocked: $pkg")
+                    db.getReference("blocked_apps").child(deviceId).child(pkg).removeValue()
+                }
             }
+
             CommandTypes.SET_APP_LIMIT -> {
                 val parts = cmd.value.split(":")
                 if (parts.size == 2) {
-                    val pkg   = parts[0]
-                    val mins  = parts[1].toIntOrNull() ?: return
-                    val json  = prefs.getString("app_limits", "{}") ?: "{}"
-                    val entry = "\"$pkg\":$mins"
-                    val updated = if (json == "{}") "{$entry}"
-                                  else json.replace("}", ",$entry}")
-                    prefs.edit().putString("app_limits", updated).apply()
+                    val pkg  = parts[0].trim()
+                    val mins = parts[1].toIntOrNull() ?: return
+                    // Store limit in prefs for accessibility service
+                    prefs.edit().putInt("limit_$pkg", mins).apply()
+                    Log.d("ChildMonitor", "Set limit $pkg = $mins min")
+                    db.getReference("app_limits").child(deviceId).child(pkg).setValue(mins)
                 }
             }
+
             CommandTypes.APPROVE_DISCONNECT,
             CommandTypes.FORCE_DISCONNECT -> {
                 scope.launch {
                     try { repo.markDisconnected(deviceId) } catch (_: Exception) {}
                 }
-                prefs.edit()
-                    .putBoolean("is_paired", false)
-                    .remove("parent_device_id")
-                    .apply()
+                prefs.edit().putBoolean("is_paired", false).remove("parent_device_id").apply()
                 sendBroadcast(Intent("com.nw.childapp.DISCONNECTED"))
                 stopService(Intent(this, CameraStreamService::class.java))
                 stopService(Intent(this, MicStreamService::class.java))

@@ -1,29 +1,45 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/service/NWAccessibilityService.kt
+// PATH: app/src/main/java/com/nw/childapp/service/NWAccessibilityService.kt
 package com.nw.childapp.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.app.NotificationCompat
+import android.util.Log
 
 /**
- * Monitors foreground app changes.
- * - Blocks apps listed in shared prefs "blocked_apps"
- * - Enforces daily limits from "app_limits"
- * - Requires user to enable in Settings → Accessibility
+ * Accessibility Service for app blocking and usage limits.
+ * Detects foreground app changes and enforces parent rules.
+ *
+ * HOW TO ENABLE (no restricted settings needed):
+ * Go to Settings → Accessibility → NW Child Monitor → Enable
+ * On newer Android: Settings → Apps → Special app access →
+ * Accessibility → NW Child Monitor → ON
  */
 class NWAccessibilityService : AccessibilityService() {
 
     private val prefs by lazy { getSharedPreferences("child_prefs", MODE_PRIVATE) }
+    private var currentPackage = ""
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        // Post a low-priority sticky notification so Android keeps this service alive
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel("nw_acc", "NW Child Monitor", NotificationManager.IMPORTANCE_MIN)
-        nm.createNotificationChannel(ch)
+        Log.d("NWAccessibility", "Service connected")
+
+        // Configure what events to receive
+        val info = AccessibilityServiceInfo().apply {
+            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                         AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            notificationTimeout = 100
+        }
+        serviceInfo = info
+
         startForeground(3, buildNotification())
     }
 
@@ -32,57 +48,42 @@ class NWAccessibilityService : AccessibilityService() {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val pkg = event.packageName?.toString() ?: return
-        if (pkg == this.packageName) return      // never block ourselves
+        if (pkg == this.packageName) return
+        if (pkg == currentPackage) return  // same app, skip
+        currentPackage = pkg
 
-        checkBlockedApp(pkg)
-        checkAppLimit(pkg)
+        checkAndEnforce(pkg)
     }
 
-    override fun onInterrupt() { /* required override */ }
-
-    // ── Block check ──────────────────────────────────────────────────
-
-    private fun checkBlockedApp(pkg: String) {
-        val blocked = prefs.getStringSet("blocked_apps", emptySet()) ?: return
+    private fun checkAndEnforce(pkg: String) {
+        // Check blocked apps
+        val blocked = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
         if (blocked.contains(pkg)) {
+            Log.d("NWAccessibility", "Blocking app: $pkg")
             performGlobalAction(GLOBAL_ACTION_HOME)
-            notify("App Blocked", "$pkg is blocked by your parent.", pkg.hashCode())
+            showNotification("App Blocked", "$pkg is blocked by your parent.")
+            return
+        }
+
+        // Check time limits — stored as limit_{packageName} = minutes
+        val limitMins = prefs.getInt("limit_$pkg", -1)
+        if (limitMins > 0) {
+            val usedMins = prefs.getInt("used_$pkg", 0)
+            if (usedMins >= limitMins) {
+                Log.d("NWAccessibility", "Limit reached: $pkg used=$usedMins limit=$limitMins")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                showNotification("Daily Limit Reached", "You've used your daily limit for $pkg.")
+            }
         }
     }
 
-    // ── Usage limit check ────────────────────────────────────────────
-
-    private fun checkAppLimit(pkg: String) {
-        val limitsJson = prefs.getString("app_limits", "{}") ?: return
-        val limit = parseLimitForPackage(limitsJson, pkg) ?: return
-        val usedMinutes = prefs.getInt("used_$pkg", 0)
-        if (usedMinutes >= limit) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            notify("Limit Reached", "Daily limit for $pkg has been reached.", (pkg + "_limit").hashCode())
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    private fun parseLimitForPackage(json: String, pkg: String): Int? {
-        // Simple key extraction: "com.example.app":60
-        val key   = "\"$pkg\""
-        val start = json.indexOf(key)
-        if (start == -1) return null
-        val colon = json.indexOf(':', start + key.length)
-        if (colon == -1) return null
-        val end = json.indexOfFirst { it == ',' || it == '}' }.takeIf { it > colon }
-            ?: json.length
-        return json.substring(colon + 1, end).trim().toIntOrNull()
-    }
-
-    private fun notify(title: String, text: String, id: Int) {
-        val nm        = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "nw_child_block"
+    private fun showNotification(title: String, text: String) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "nw_block"
         nm.createNotificationChannel(
             NotificationChannel(channelId, "App Control", NotificationManager.IMPORTANCE_HIGH)
         )
-        nm.notify(id,
+        nm.notify(title.hashCode(),
             NotificationCompat.Builder(this, channelId)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setContentTitle(title)
@@ -92,12 +93,19 @@ class NWAccessibilityService : AccessibilityService() {
         )
     }
 
+    override fun onInterrupt() {}
+
     private fun buildNotification(): Notification {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.createNotificationChannel(
+            NotificationChannel("nw_acc", "NW Child Active", NotificationManager.IMPORTANCE_MIN)
+        )
         return NotificationCompat.Builder(this, "nw_acc")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("NW Child Active")
             .setContentText("Device protection running")
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
     }
 }

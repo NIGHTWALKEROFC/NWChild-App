@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/ui/screens/PairingInputScreen.kt
+// PATH: app/src/main/java/com/nw/childapp/ui/screens/PairingInputScreen.kt
 package com.nw.childapp.ui.screens
 
 import androidx.compose.animation.*
@@ -37,12 +37,10 @@ fun PairingInputScreen(
     val uiState by viewModel.uiState.collectAsState()
     var code by remember { mutableStateOf("") }
 
-    // Navigate once paired
     LaunchedEffect(uiState.isPaired) {
         if (uiState.isPaired) onPaired()
     }
 
-    // Pulse animation on the icon
     val pulse = rememberInfiniteTransition(label = "pulse")
     val pAlpha by pulse.animateFloat(
         0.55f, 1f,
@@ -65,7 +63,6 @@ fun PairingInputScreen(
         ) {
             Spacer(Modifier.height(40.dp))
 
-            // App icon
             Box(
                 modifier = Modifier
                     .size(112.dp)
@@ -84,7 +81,6 @@ fun PairingInputScreen(
 
             Spacer(Modifier.height(48.dp))
 
-            // Input card
             Card(
                 modifier  = Modifier.fillMaxWidth(),
                 shape     = RoundedCornerShape(24.dp),
@@ -92,7 +88,7 @@ fun PairingInputScreen(
                 elevation = CardDefaults.cardElevation(10.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(28.dp),
+                    modifier = Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -105,24 +101,26 @@ fun PairingInputScreen(
                     Spacer(Modifier.height(10.dp))
 
                     Text(
-                        "Get the 6-digit code shown on the\nNW Parental app on your parent's phone",
+                        "Get the 6-digit code from the\nNW Parental app on your parent's phone",
                         fontSize = 13.sp, color = ChildOnSurface,
                         textAlign = TextAlign.Center, lineHeight = 20.sp
                     )
 
-                    Spacer(Modifier.height(28.dp))
+                    Spacer(Modifier.height(24.dp))
 
-                    // 6 individual digit boxes (display only — input from hidden field)
+                    // 6 digit boxes using weight so all fit
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         repeat(6) { index ->
                             if (index == 3) Spacer(Modifier.width(6.dp))
                             val char = code.getOrNull(index)
                             Box(
                                 modifier = Modifier
-                                    .size(44.dp, 58.dp)
+                                    .weight(1f)
+                                    .height(52.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(ChildSurface)
                                     .border(
@@ -135,7 +133,7 @@ fun PairingInputScreen(
                             ) {
                                 Text(
                                     text = char?.toString() ?: "",
-                                    fontSize = 28.sp,
+                                    fontSize = 24.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontFamily = FontFamily.Monospace,
                                     color = ChildOnBackground
@@ -144,9 +142,8 @@ fun PairingInputScreen(
                         }
                     }
 
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(16.dp))
 
-                    // Hidden actual input field
                     OutlinedTextField(
                         value         = code,
                         onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) code = it },
@@ -170,7 +167,7 @@ fun PairingInputScreen(
                         shape = RoundedCornerShape(12.dp)
                     )
 
-                    Spacer(Modifier.height(22.dp))
+                    Spacer(Modifier.height(20.dp))
 
                     Button(
                         onClick  = { if (code.length == 6) viewModel.submitPairingCode(code) },
@@ -199,7 +196,6 @@ fun PairingInputScreen(
                 }
             }
 
-            // Error message
             AnimatedVisibility(visible = uiState.errorMessage != null) {
                 Column {
                     Spacer(Modifier.height(16.dp))

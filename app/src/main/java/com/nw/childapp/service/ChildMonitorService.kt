@@ -1,45 +1,39 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/service/ChildMonitorService.kt
+// PATH: app/src/main/java/com/nw/childapp/service/ChildMonitorService.kt
 package com.nw.childapp.service
 
 import android.app.*
 import android.content.Intent
+import android.database.Cursor
 import android.os.IBinder
+import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.nw.childapp.data.CommandTypes
 import com.nw.childapp.data.ControlCommand
 import com.nw.childapp.data.repository.ChildRepository
 import com.nw.childapp.util.PermissionHelper
+import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.*
 
-/**
- * Persistent foreground service that:
- *  1. Keeps the Firebase command listener alive in the background
- *  2. Starts / stops Camera, Mic, and Screen services based on parent commands
- *  3. Uploads permission state to Firebase every 15 seconds
- *  4. Auto-restarts after being killed (START_STICKY)
- */
 class ChildMonitorService : Service() {
 
     private val repo  = ChildRepository()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val prefs by lazy { getSharedPreferences("child_prefs", MODE_PRIVATE) }
+    private val db    by lazy { FirebaseDatabase.getInstance() }
 
     private val deviceId: String get() = prefs.getString("device_id", "") ?: ""
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(2, buildNotification())
-
         if (deviceId.isNotEmpty()) {
             launchCommandListener()
             launchPermissionReporter()
             markOnline(true)
+            syncContactsToFirebase()
         }
-
-        return START_STICKY   // OS will restart this if killed
+        return START_STICKY
     }
-
-    // ── Command listener ─────────────────────────────────────────────
 
     private fun launchCommandListener() {
         scope.launch {
@@ -51,12 +45,10 @@ class ChildMonitorService : Service() {
             } catch (e: Exception) {
                 Log.e("ChildMonitor", "Command listener error: ${e.message}")
                 delay(5_000)
-                launchCommandListener()   // restart listener on error
+                launchCommandListener()
             }
         }
     }
-
-    // ── Permission reporter ──────────────────────────────────────────
 
     private fun launchPermissionReporter() {
         scope.launch {
@@ -73,6 +65,42 @@ class ChildMonitorService : Service() {
         }
     }
 
+    // ── Sync contacts to Firebase so parent can view them ─────────────
+    private fun syncContactsToFirebase() {
+        scope.launch {
+            try {
+                val contacts = mutableListOf<Map<String, String>>()
+                val cursor: Cursor? = applicationContext.contentResolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    arrayOf(
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER
+                    ),
+                    null, null,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+                )
+                cursor?.use {
+                    val nameIdx   = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                    val numberIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    while (it.moveToNext()) {
+                        val name   = it.getString(nameIdx)   ?: continue
+                        val number = it.getString(numberIdx) ?: ""
+                        contacts.add(mapOf("name" to name, "number" to number))
+                    }
+                }
+                // Upload to Firebase
+                val contactsRef = db.getReference("contacts").child(deviceId)
+                contactsRef.removeValue()
+                contacts.forEachIndexed { index, contact ->
+                    contactsRef.child("contact_$index").setValue(contact)
+                }
+                Log.d("ChildMonitor", "Synced ${contacts.size} contacts")
+            } catch (e: Exception) {
+                Log.e("ChildMonitor", "Contact sync error: ${e.message}")
+            }
+        }
+    }
+
     private fun markOnline(online: Boolean) {
         scope.launch {
             try { repo.updateOnlineStatus(deviceId, online) }
@@ -80,31 +108,21 @@ class ChildMonitorService : Service() {
         }
     }
 
-    // ── Command handler ──────────────────────────────────────────────
-
     private fun handleCommand(cmd: ControlCommand) {
         Log.d("ChildMonitor", "Command: ${cmd.type} value=${cmd.value}")
         when (cmd.type) {
-
-            // Camera
             CommandTypes.ENABLE_CAMERA ->
                 startForegroundService(Intent(this, CameraStreamService::class.java))
             CommandTypes.DISABLE_CAMERA ->
                 stopService(Intent(this, CameraStreamService::class.java))
-
-            // Microphone
             CommandTypes.ENABLE_MIC ->
                 startForegroundService(Intent(this, MicStreamService::class.java))
             CommandTypes.DISABLE_MIC ->
                 stopService(Intent(this, MicStreamService::class.java))
-
-            // Screen share — activity must handle MediaProjection prompt
             CommandTypes.START_SCREEN_SHARE ->
                 sendBroadcast(Intent("com.nw.childapp.START_SCREEN_SHARE"))
             CommandTypes.STOP_SCREEN_SHARE ->
                 stopService(Intent(this, ScreenCaptureService::class.java))
-
-            // App blocking
             CommandTypes.BLOCK_APP -> {
                 val blocked = prefs.getStringSet("blocked_apps", mutableSetOf())
                     ?.toMutableSet() ?: mutableSetOf()
@@ -117,8 +135,6 @@ class ChildMonitorService : Service() {
                 blocked.remove(cmd.value)
                 prefs.edit().putStringSet("blocked_apps", blocked).apply()
             }
-
-            // App time limits  value format = "com.pkg:60"
             CommandTypes.SET_APP_LIMIT -> {
                 val parts = cmd.value.split(":")
                 if (parts.size == 2) {
@@ -131,8 +147,6 @@ class ChildMonitorService : Service() {
                     prefs.edit().putString("app_limits", updated).apply()
                 }
             }
-
-            // Disconnect (parent-approved or force)
             CommandTypes.APPROVE_DISCONNECT,
             CommandTypes.FORCE_DISCONNECT -> {
                 scope.launch {
@@ -142,24 +156,16 @@ class ChildMonitorService : Service() {
                     .putBoolean("is_paired", false)
                     .remove("parent_device_id")
                     .apply()
-                // Notify UI
                 sendBroadcast(Intent("com.nw.childapp.DISCONNECTED"))
-                // Stop all child services
                 stopService(Intent(this, CameraStreamService::class.java))
                 stopService(Intent(this, MicStreamService::class.java))
                 stopService(Intent(this, ScreenCaptureService::class.java))
                 stopSelf()
             }
-
-            // Parent-approved app deletion
             CommandTypes.APPROVE_DELETE ->
                 sendBroadcast(Intent("com.nw.childapp.APPROVE_DELETE"))
-
-            // Parent denied requests — UI handled in ViewModel via Firebase listener
         }
     }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────
 
     override fun onDestroy() {
         markOnline(false)

@@ -1,12 +1,14 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/ui/MainActivity.kt
+// PATH: app/src/main/java/com/nw/childapp/ui/MainActivity.kt
 package com.nw.childapp.ui
 
+import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -19,38 +21,68 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.nw.childapp.service.NWDeviceAdminReceiver
+import com.nw.childapp.service.ScreenCaptureService
 import com.nw.childapp.ui.screens.ChildDashboardScreen
 import com.nw.childapp.ui.screens.PermissionsScreen
 import com.nw.childapp.ui.screens.PairingInputScreen
 import com.nw.childapp.ui.theme.NWChildTheme
 import com.nw.childapp.viewmodel.ChildViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: ChildViewModel by viewModels()
 
-    // ── Permission launchers ──────────────────────────────────────────
-
-    /** Standard runtime permissions (camera, mic, storage, contacts) */
+    // ── Runtime permissions ───────────────────────────────────────────
     private val runtimePermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { viewModel.refreshPermissions() }
 
-    /** Special settings screens (accessibility, notification listener, usage stats) */
+    // ── Special settings ──────────────────────────────────────────────
     private val settingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { viewModel.refreshPermissions() }
 
-    /** Device admin activation */
+    // ── Device admin ──────────────────────────────────────────────────
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* device admin enabled/denied */ }
+    ) { /* admin enabled/denied */ }
 
-    // ── Broadcast receiver for approved delete ────────────────────────
+    // ── MediaProjection for screen share ──────────────────────────────
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val intent = Intent(this, ScreenCaptureService::class.java).apply {
+                putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, result.data)
+            }
+            startForegroundService(intent)
+        }
+    }
+
+    // ── Broadcast receivers ───────────────────────────────────────────
+    private val screenShareReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.nw.childapp.START_SCREEN_SHARE") {
+                requestMediaProjection()
+            }
+        }
+    }
+
+    private val disconnectReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.nw.childapp.DISCONNECTED") {
+                lifecycleScope.launch { viewModel.performDisconnect() }
+            }
+        }
+    }
+
     private val deleteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.nw.childapp.APPROVE_DELETE") {
@@ -62,8 +94,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        registerReceiver(deleteReceiver, IntentFilter("com.nw.childapp.APPROVE_DELETE"),
-            RECEIVER_NOT_EXPORTED)
+        // Register receivers
+        registerReceiver(screenShareReceiver, IntentFilter("com.nw.childapp.START_SCREEN_SHARE"), RECEIVER_NOT_EXPORTED)
+        registerReceiver(disconnectReceiver,  IntentFilter("com.nw.childapp.DISCONNECTED"),       RECEIVER_NOT_EXPORTED)
+        registerReceiver(deleteReceiver,      IntentFilter("com.nw.childapp.APPROVE_DELETE"),     RECEIVER_NOT_EXPORTED)
 
         requestDeviceAdminIfNeeded()
 
@@ -77,9 +111,9 @@ class MainActivity : ComponentActivity() {
                     val uiState by viewModel.uiState.collectAsState()
 
                     val startDest = when {
-                        !uiState.isPaired               -> "pairing"
-                        !uiState.allPermissionsGranted  -> "permissions"
-                        else                            -> "dashboard"
+                        !uiState.isPaired              -> "pairing"
+                        !uiState.allPermissionsGranted -> "permissions"
+                        else                           -> "dashboard"
                     }
 
                     NavHost(navController = navController, startDestination = startDest) {
@@ -97,8 +131,8 @@ class MainActivity : ComponentActivity() {
 
                         composable("permissions") {
                             PermissionsScreen(
-                                viewModel                  = viewModel,
-                                onAllGranted               = {
+                                viewModel                   = viewModel,
+                                onAllGranted                = {
                                     navController.navigate("dashboard") {
                                         popUpTo("permissions") { inclusive = true }
                                     }
@@ -106,7 +140,7 @@ class MainActivity : ComponentActivity() {
                                 onRequestRuntimePermissions = { perms ->
                                     runtimePermLauncher.launch(perms)
                                 },
-                                onOpenSettings             = { action ->
+                                onOpenSettings              = { action ->
                                     openSpecialSettings(action)
                                 }
                             )
@@ -114,8 +148,8 @@ class MainActivity : ComponentActivity() {
 
                         composable("dashboard") {
                             ChildDashboardScreen(
-                                viewModel         = viewModel,
-                                onDisconnected    = {
+                                viewModel            = viewModel,
+                                onDisconnected       = {
                                     navController.navigate("pairing") {
                                         popUpTo("dashboard") { inclusive = true }
                                     }
@@ -140,14 +174,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(deleteReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(screenShareReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(disconnectReceiver)  } catch (_: Exception) {}
+        try { unregisterReceiver(deleteReceiver)      } catch (_: Exception) {}
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
 
     private fun requestDeviceAdminIfNeeded() {
-        val dpm     = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val admin   = ComponentName(this, NWDeviceAdminReceiver::class.java)
+        val dpm   = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val admin = ComponentName(this, NWDeviceAdminReceiver::class.java)
         if (!dpm.isAdminActive(admin)) {
             val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
                 putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
@@ -160,9 +196,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestMediaProjection() {
+        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+    }
+
     fun openSpecialSettings(action: String) {
         val intent = when (action) {
-            "accessibility"         -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            "accessibility" -> {
+                // Direct to accessibility settings — user enables NW Child Monitor there
+                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            }
             "notification_listener" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
             "usage_access"          -> Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             "overlay"               -> Intent(

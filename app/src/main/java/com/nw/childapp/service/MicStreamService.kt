@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/service/MicStreamService.kt
+// PATH: app/src/main/java/com/nw/childapp/service/MicStreamService.kt
 package com.nw.childapp.service
 
 import android.app.*
@@ -14,12 +14,6 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import kotlinx.coroutines.*
 
-/**
- * Microphone streaming service.
- * Records PCM audio in 2-second chunks and uploads each chunk as Base64
- * to Firebase Realtime Database for the parent to monitor.
- * Declared foregroundServiceType="microphone" in manifest.
- */
 class MicStreamService : Service() {
 
     private val db    by lazy { FirebaseDatabase.getInstance() }
@@ -28,11 +22,13 @@ class MicStreamService : Service() {
 
     private var audioRecord: AudioRecord? = null
 
-    private val sampleRate   = 16_000
+    // High quality audio settings
+    private val sampleRate    = 44100
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
-    private val audioFormat  = AudioFormat.ENCODING_PCM_16BIT
-    private val minBuffer    by lazy {
-        AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 4
+    private val audioFormat   = AudioFormat.ENCODING_PCM_16BIT
+
+    private val minBuffer by lazy {
+        AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -43,18 +39,14 @@ class MicStreamService : Service() {
 
     private fun startRecording() {
         val deviceId = prefs.getString("device_id", null) ?: run { stopSelf(); return }
-
         try {
             audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 sampleRate, channelConfig, audioFormat, minBuffer
             )
-
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("MicStream", "AudioRecord failed to initialize")
-                stopSelf(); return
+                Log.e("MicStream", "AudioRecord init failed"); stopSelf(); return
             }
-
             audioRecord?.startRecording()
 
             scope.launch {
@@ -64,21 +56,25 @@ class MicStreamService : Service() {
                     if (read > 0) {
                         val chunk  = buffer.copyOf(read)
                         val base64 = Base64.encodeToString(chunk, Base64.NO_WRAP)
+                        // Upload chunk — parent reads and plays it
                         db.getReference("audio_chunks").child(deviceId).setValue(
                             mapOf(
                                 "chunk"      to base64,
                                 "sampleRate" to sampleRate,
+                                "encoding"   to "PCM_16BIT",
+                                "channels"   to 1,
                                 "timestamp"  to ServerValue.TIMESTAMP
                             )
                         )
                     }
-                    delay(2_000)   // send a new chunk every 2 seconds
+                    // Send chunk every 500ms for near-real-time audio
+                    delay(500)
                 }
             }
         } catch (e: SecurityException) {
-            Log.e("MicStream", "Microphone permission not granted"); stopSelf()
+            Log.e("MicStream", "Permission denied"); stopSelf()
         } catch (e: Exception) {
-            Log.e("MicStream", "Recording error: ${e.message}"); stopSelf()
+            Log.e("MicStream", "Error: ${e.message}"); stopSelf()
         }
     }
 

@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/ui/screens/ChildDashboardScreen.kt
+// PATH: app/src/main/java/com/nw/childapp/ui/screens/ChildDashboardScreen.kt
 package com.nw.childapp.ui.screens
 
 import androidx.compose.animation.*
@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.nw.childapp.data.ChildPermissions
 import com.nw.childapp.ui.theme.*
 import com.nw.childapp.viewmodel.ChildViewModel
 import kotlinx.coroutines.delay
@@ -32,34 +31,68 @@ fun ChildDashboardScreen(
     onPermissionsMissing: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var showDisconnectDialog by remember { mutableStateOf(false) }
-    var showDeleteDialog     by remember { mutableStateOf(false) }
+
+    var showDisconnectDialog    by remember { mutableStateOf(false) }
+    var showDeleteDialog        by remember { mutableStateOf(false) }
+    // Permission removal intercept
+    var showPermissionWarning   by remember { mutableStateOf(false) }
+    var permissionWarningMsg    by remember { mutableStateOf("") }
 
     // Navigate away if disconnected
     LaunchedEffect(uiState.isPaired) {
         if (!uiState.isPaired) onDisconnected()
     }
 
-    // Navigate away if permissions dropped
+    // Instead of navigating away when permission drops — show warning and request parent
     LaunchedEffect(uiState.allPermissionsGranted) {
-        if (!uiState.allPermissionsGranted) onPermissionsMissing()
+        if (!uiState.allPermissionsGranted && uiState.isPaired) {
+            // Show warning — don't auto navigate, let child see the warning first
+            permissionWarningMsg = "A permission was disabled. Parent has been notified. Please re-enable it."
+            showPermissionWarning = true
+        }
     }
 
-    // Auto-clear success toast
     LaunchedEffect(uiState.successMessage) {
         if (uiState.successMessage != null) { delay(2500); viewModel.clearSuccess() }
     }
 
     // ── Dialogs ───────────────────────────────────────────────────────
 
-    // Disconnect denied
+    // Permission removed warning — stay in app, show re-enable prompt
+    if (showPermissionWarning) {
+        AlertDialog(
+            onDismissRequest = {},
+            containerColor   = ChildCard,
+            icon  = { Icon(Icons.Default.Warning, null, tint = ChildWarning) },
+            title = { Text("Permission Disabled", color = ChildOnBackground, fontWeight = FontWeight.Bold) },
+            text  = {
+                Text(
+                    "A required permission was turned off.\nYour parent has been notified.\n\nPlease go to Settings and re-enable the permission to continue using this device.",
+                    color       = ChildOnSurface,
+                    textAlign   = TextAlign.Center,
+                    lineHeight  = 20.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPermissionWarning = false
+                        onPermissionsMissing()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ChildAccent)
+                ) { Text("Re-enable Permissions", color = Color(0xFF003300), fontWeight = FontWeight.Bold) }
+            }
+        )
+    }
+
+    // Disconnect request denied
     if (uiState.disconnectDenied) {
         AlertDialog(
             onDismissRequest = { viewModel.clearDisconnectDenied() },
             containerColor   = ChildCard,
             icon  = { Icon(Icons.Default.Block, null, tint = ChildError) },
             title = { Text("Request Denied", color = ChildOnBackground, fontWeight = FontWeight.Bold) },
-            text  = { Text("Your parent denied the disconnect request.", color = ChildOnSurface) },
+            text  = { Text("Your parent denied the disconnect request.", color = ChildOnSurface, textAlign = TextAlign.Center) },
             confirmButton = {
                 Button(onClick = { viewModel.clearDisconnectDenied() },
                     colors = ButtonDefaults.buttonColors(containerColor = ChildAccent)
@@ -75,7 +108,7 @@ fun ChildDashboardScreen(
             containerColor   = ChildCard,
             icon  = { Icon(Icons.Default.Block, null, tint = ChildError) },
             title = { Text("Delete Denied", color = ChildOnBackground, fontWeight = FontWeight.Bold) },
-            text  = { Text("Your parent denied the app deletion request.", color = ChildOnSurface) },
+            text  = { Text("Your parent denied the app deletion request.", color = ChildOnSurface, textAlign = TextAlign.Center) },
             confirmButton = {
                 Button(onClick = { viewModel.clearDeleteDenied() },
                     colors = ButtonDefaults.buttonColors(containerColor = ChildAccent)
@@ -109,7 +142,6 @@ fun ChildDashboardScreen(
     }
 
     // ── Main UI ───────────────────────────────────────────────────────
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -123,7 +155,7 @@ fun ChildDashboardScreen(
         ) {
             Spacer(Modifier.height(52.dp))
 
-            // Header row
+            // Header
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier.size(46.dp).clip(CircleShape)
@@ -196,7 +228,7 @@ fun ChildDashboardScreen(
                 Spacer(Modifier.height(14.dp))
             }
 
-            // Permissions overview card
+            // Permissions overview
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape    = RoundedCornerShape(20.dp),
@@ -208,6 +240,24 @@ fun ChildDashboardScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("PERMISSIONS", fontSize = 11.sp, fontWeight = FontWeight.Bold,
                             color = ChildAccent, letterSpacing = 2.sp)
+                        Spacer(Modifier.weight(1f))
+                        // Overall status badge
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(
+                                    if (uiState.allPermissionsGranted) ChildSuccess.copy(0.15f)
+                                    else ChildError.copy(0.15f)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                if (uiState.allPermissionsGranted) "All Active" else "Action Needed",
+                                fontSize   = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color      = if (uiState.allPermissionsGranted) ChildSuccess else ChildError
+                            )
+                        }
                     }
                     Spacer(Modifier.height(12.dp))
                     val p = uiState.permissions
@@ -222,9 +272,9 @@ fun ChildDashboardScreen(
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // Device info card
+            // Device info
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape    = RoundedCornerShape(16.dp),
@@ -239,7 +289,28 @@ fun ChildDashboardScreen(
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
+
+            // Important notice about permissions
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape    = RoundedCornerShape(14.dp),
+                colors   = CardDefaults.cardColors(containerColor = ChildWarning.copy(0.08f)),
+                border   = BorderStroke(1.dp, ChildWarning.copy(0.3f))
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Default.Info, null, tint = ChildWarning, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Do not disable any permissions. If you want to disconnect or delete this app, you must get approval from your parent first.",
+                        fontSize   = 12.sp,
+                        color      = ChildWarning,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
 
             // Disconnect / Delete card
             Card(
@@ -251,8 +322,7 @@ fun ChildDashboardScreen(
                 Column(Modifier.padding(16.dp)) {
                     Text("Manage Connection", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ChildError)
                     Spacer(Modifier.height(4.dp))
-                    Text("Both actions require parent approval to complete.",
-                        fontSize = 11.sp, color = ChildOnSurface)
+                    Text("Both actions require parent approval.", fontSize = 11.sp, color = ChildOnSurface)
                     Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(
@@ -283,7 +353,7 @@ fun ChildDashboardScreen(
             Spacer(Modifier.height(36.dp))
         }
 
-        // Disconnect confirm dialog
+        // Disconnect confirm
         if (showDisconnectDialog) {
             AlertDialog(
                 onDismissRequest = { showDisconnectDialog = false },
@@ -292,7 +362,7 @@ fun ChildDashboardScreen(
                 title = { Text("Request Disconnect?", color = ChildOnBackground, fontWeight = FontWeight.Bold) },
                 text  = {
                     Text(
-                        "A disconnect request will be sent to your parent. Disconnecting requires their approval.",
+                        "A request will be sent to your parent.\nDisconnecting requires their approval.",
                         color = ChildOnSurface, textAlign = TextAlign.Center
                     )
                 },
@@ -310,7 +380,7 @@ fun ChildDashboardScreen(
             )
         }
 
-        // Delete confirm dialog
+        // Delete confirm
         if (showDeleteDialog) {
             AlertDialog(
                 onDismissRequest = { showDeleteDialog = false },
@@ -319,7 +389,7 @@ fun ChildDashboardScreen(
                 title = { Text("Request App Deletion?", color = ChildOnBackground, fontWeight = FontWeight.Bold) },
                 text  = {
                     Text(
-                        "A delete request will be sent to your parent. The app can only be uninstalled after they approve.",
+                        "A request will be sent to your parent.\nThe app can only be deleted after their approval.",
                         color = ChildOnSurface, textAlign = TextAlign.Center
                     )
                 },
@@ -358,8 +428,6 @@ fun ChildDashboardScreen(
     }
 }
 
-// ── Reusable composables ──────────────────────────────────────────────
-
 @Composable
 private fun ActiveChip(label: String, icon: ImageVector) {
     Row(
@@ -383,7 +451,7 @@ private fun PermRow(label: String, icon: ImageVector, granted: Boolean, isLast: 
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, null,
-            tint = if (granted) ChildSuccess else ChildOnSurface,
+            tint = if (granted) ChildSuccess else ChildError,
             modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(10.dp))
         Text(label, fontSize = 13.sp, color = ChildOnBackground, modifier = Modifier.weight(1f))
@@ -393,8 +461,11 @@ private fun PermRow(label: String, icon: ImageVector, granted: Boolean, isLast: 
                 .background(if (granted) ChildSuccess.copy(0.15f) else ChildError.copy(0.15f))
                 .padding(horizontal = 9.dp, vertical = 3.dp)
         ) {
-            Text(if (granted) "ON" else "OFF", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
-                color = if (granted) ChildSuccess else ChildError)
+            Text(
+                if (granted) "ON" else "OFF",
+                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+                color = if (granted) ChildSuccess else ChildError
+            )
         }
     }
     if (!isLast) Divider(color = ChildSurface, thickness = 1.dp)

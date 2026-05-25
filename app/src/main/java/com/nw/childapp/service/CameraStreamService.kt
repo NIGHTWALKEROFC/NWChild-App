@@ -1,4 +1,4 @@
-// PATH: nw-child-app/app/src/main/java/com/nw/childapp/service/CameraStreamService.kt
+// PATH: app/src/main/java/com/nw/childapp/service/CameraStreamService.kt
 package com.nw.childapp.service
 
 import android.app.*
@@ -16,23 +16,21 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import kotlinx.coroutines.*
 
-/**
- * Live camera streaming service.
- * Uses Camera2 API to capture JPEG frames every 3 seconds and uploads
- * them as Base64 to Firebase Realtime Database for parent to view.
- * Declared foregroundServiceType="camera" in manifest.
- */
 class CameraStreamService : Service() {
 
     private val db    by lazy { FirebaseDatabase.getInstance() }
     private val prefs by lazy { getSharedPreferences("child_prefs", MODE_PRIVATE) }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private var cameraDevice:    CameraDevice?          = null
-    private var captureSession:  CameraCaptureSession?  = null
-    private var imageReader:     ImageReader?           = null
-    private var bgThread:        HandlerThread?         = null
-    private var bgHandler:       Handler?               = null
+    private var cameraDevice:   CameraDevice?         = null
+    private var captureSession: CameraCaptureSession?  = null
+    private var imageReader:    ImageReader?           = null
+    private var bgThread:       HandlerThread?         = null
+    private var bgHandler:      Handler?               = null
+
+    // Higher quality capture size
+    private val captureWidth  = 1280
+    private val captureHeight = 720
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(11, buildNotification())
@@ -40,8 +38,6 @@ class CameraStreamService : Service() {
         openCamera()
         return START_NOT_STICKY
     }
-
-    // ── Camera setup ─────────────────────────────────────────────────
 
     private fun startBackground() {
         bgThread  = HandlerThread("NWCameraThread").also { it.start() }
@@ -51,21 +47,23 @@ class CameraStreamService : Service() {
     private fun openCamera() {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         try {
-            // Prefer back camera; fall back to first available
             val cameraId = manager.cameraIdList.firstOrNull { id ->
                 manager.getCameraCharacteristics(id)
                     .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
             } ?: manager.cameraIdList.firstOrNull() ?: run { stopSelf(); return }
 
             val map = manager.getCameraCharacteristics(cameraId)
-                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: run { stopSelf(); return }
-
-            // Pick smallest JPEG output size to reduce bandwidth
-            val size = map.getOutputSizes(ImageFormat.JPEG)
-                .minByOrNull { it.width * it.height }
+                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: run { stopSelf(); return }
 
-            imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+            // Find best available size close to 720p
+            val sizes = map.getOutputSizes(ImageFormat.JPEG)
+            val bestSize = sizes.filter { it.width <= captureWidth && it.height <= captureHeight }
+                .maxByOrNull { it.width * it.height }
+                ?: sizes.minByOrNull { it.width * it.height }
+                ?: run { stopSelf(); return }
+
+            imageReader = ImageReader.newInstance(bestSize.width, bestSize.height, ImageFormat.JPEG, 3)
             imageReader!!.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
                 try {
@@ -74,7 +72,12 @@ class CameraStreamService : Service() {
                     val bytes    = ByteArray(buffer.remaining()).also { buffer.get(it) }
                     val base64   = Base64.encodeToString(bytes, Base64.NO_WRAP)
                     db.getReference("camera_frames").child(deviceId).setValue(
-                        mapOf("frame" to base64, "timestamp" to ServerValue.TIMESTAMP)
+                        mapOf(
+                            "frame"     to base64,
+                            "width"     to bestSize.width,
+                            "height"    to bestSize.height,
+                            "timestamp" to ServerValue.TIMESTAMP
+                        )
                     )
                 } catch (e: Exception) {
                     Log.e("CameraStream", "Frame error: ${e.message}")
@@ -98,7 +101,7 @@ class CameraStreamService : Service() {
             }, bgHandler)
 
         } catch (e: SecurityException) {
-            Log.e("CameraStream", "Camera permission not granted"); stopSelf()
+            Log.e("CameraStream", "No permission"); stopSelf()
         } catch (e: Exception) {
             Log.e("CameraStream", "Open failed: ${e.message}"); stopSelf()
         }
@@ -110,8 +113,11 @@ class CameraStreamService : Service() {
         try {
             val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
+                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                set(CaptureRequest.JPEG_QUALITY, 50.toByte())
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                set(CaptureRequest.JPEG_QUALITY, 85.toByte()) // Higher quality JPEG
             }
 
             @Suppress("DEPRECATION")
@@ -127,22 +133,19 @@ class CameraStreamService : Service() {
                                 } catch (e: CameraAccessException) {
                                     Log.e("CameraStream", "Capture error: ${e.message}")
                                 }
-                                delay(3_000)
+                                delay(1000) // 1 frame per second — balanced quality vs lag
                             }
                         }
                     }
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Log.e("CameraStream", "Session configure failed"); stopSelf()
                     }
-                },
-                bgHandler
+                }, bgHandler
             )
         } catch (e: CameraAccessException) {
-            Log.e("CameraStream", "Session start error: ${e.message}"); stopSelf()
+            Log.e("CameraStream", "Session error: ${e.message}"); stopSelf()
         }
     }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────
 
     override fun onDestroy() {
         scope.cancel()

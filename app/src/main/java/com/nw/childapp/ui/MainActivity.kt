@@ -8,10 +8,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +27,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.google.firebase.database.FirebaseDatabase
 import com.nw.childapp.service.NWDeviceAdminReceiver
 import com.nw.childapp.service.ScreenCaptureService
 import com.nw.childapp.ui.screens.ChildDashboardScreen
@@ -38,22 +41,19 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: ChildViewModel by viewModels()
 
-    // ── Runtime permissions ───────────────────────────────────────────
+    // ── Launchers ─────────────────────────────────────────────────────
     private val runtimePermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { viewModel.refreshPermissions() }
 
-    // ── Special settings ──────────────────────────────────────────────
     private val settingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { viewModel.refreshPermissions() }
 
-    // ── Device admin ──────────────────────────────────────────────────
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* admin enabled/denied */ }
+    ) { /* admin enabled */ }
 
-    // ── MediaProjection for screen share ──────────────────────────────
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -63,6 +63,9 @@ class MainActivity : ComponentActivity() {
                 putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, result.data)
             }
             startForegroundService(intent)
+            Log.d("MainActivity", "Screen capture started with projection")
+        } else {
+            Log.e("MainActivity", "MediaProjection denied")
         }
     }
 
@@ -83,10 +86,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Delete: don't uninstall — instead open the app and show permission dialog
     private val deleteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.nw.childapp.APPROVE_DELETE") {
-                initiateUninstall()
+                // Parent approved — now actually allow uninstall
+                val uninstallIntent = Intent(Intent.ACTION_DELETE).apply {
+                    data = Uri.parse("package:$packageName")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(uninstallIntent)
             }
         }
     }
@@ -94,12 +103,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Register receivers
         registerReceiver(screenShareReceiver, IntentFilter("com.nw.childapp.START_SCREEN_SHARE"), RECEIVER_NOT_EXPORTED)
         registerReceiver(disconnectReceiver,  IntentFilter("com.nw.childapp.DISCONNECTED"),       RECEIVER_NOT_EXPORTED)
         registerReceiver(deleteReceiver,      IntentFilter("com.nw.childapp.APPROVE_DELETE"),     RECEIVER_NOT_EXPORTED)
 
         requestDeviceAdminIfNeeded()
+
+        // Sync installed apps to Firebase for parent to see
+        syncInstalledApps()
 
         setContent {
             NWChildTheme {
@@ -117,7 +128,6 @@ class MainActivity : ComponentActivity() {
                     }
 
                     NavHost(navController = navController, startDestination = startDest) {
-
                         composable("pairing") {
                             PairingInputScreen(
                                 viewModel = viewModel,
@@ -128,7 +138,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
-
                         composable("permissions") {
                             PermissionsScreen(
                                 viewModel                   = viewModel,
@@ -145,7 +154,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
-
                         composable("dashboard") {
                             ChildDashboardScreen(
                                 viewModel            = viewModel,
@@ -179,7 +187,43 @@ class MainActivity : ComponentActivity() {
         try { unregisterReceiver(deleteReceiver)      } catch (_: Exception) {}
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────
+    // ── Sync installed user apps to Firebase ──────────────────────────
+    private fun syncInstalledApps() {
+        val prefs    = getSharedPreferences("child_prefs", Context.MODE_PRIVATE)
+        val deviceId = prefs.getString("device_id", null) ?: return
+        val isPaired = prefs.getBoolean("is_paired", false)
+        if (!isPaired) return
+
+        try {
+            val pm   = packageManager
+            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            val db   = FirebaseDatabase.getInstance()
+            val ref  = db.getReference("installed_apps").child(deviceId)
+
+            val batch = mutableMapOf<String, Any>()
+            var index = 0
+
+            for (appInfo in apps) {
+                // Only user-installed apps (not system)
+                if (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0) continue
+                if (appInfo.packageName == packageName) continue // skip self
+
+                val appName = pm.getApplicationLabel(appInfo).toString()
+                batch["app_$index"] = mapOf(
+                    "packageName" to appInfo.packageName,
+                    "appName"     to appName
+                )
+                index++
+            }
+
+            if (batch.isNotEmpty()) {
+                ref.setValue(batch)
+                Log.d("MainActivity", "Synced $index user apps")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "App sync error: ${e.message}")
+        }
+    }
 
     private fun requestDeviceAdminIfNeeded() {
         val dpm   = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -203,10 +247,7 @@ class MainActivity : ComponentActivity() {
 
     fun openSpecialSettings(action: String) {
         val intent = when (action) {
-            "accessibility" -> {
-                // Direct to accessibility settings — user enables NW Child Monitor there
-                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            }
+            "accessibility"         -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             "notification_listener" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
             "usage_access"          -> Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             "overlay"               -> Intent(
@@ -218,12 +259,5 @@ class MainActivity : ComponentActivity() {
             }
         }
         settingsLauncher.launch(intent)
-    }
-
-    private fun initiateUninstall() {
-        val intent = Intent(Intent.ACTION_DELETE).apply {
-            data = Uri.parse("package:$packageName")
-        }
-        startActivity(intent)
     }
 }

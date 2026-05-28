@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- PATH: nw-child-app/app/src/main/AndroidManifest.xml -->
+<!-- PATH: app/src/main/AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
@@ -11,11 +11,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Storage — covers all Android versions -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+    <!-- Storage -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
@@ -23,13 +21,23 @@
     <!-- Contacts -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
-    <!-- Notifications (Android 13+) -->
+    <!-- Call Log -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+
+    <!-- SMS -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+
+    <!-- Location -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Usage stats for app time limits -->
-    <uses-permission
-        android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions" />
+    <!-- Usage stats -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
 
     <!-- Foreground services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -37,9 +45,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- System overlay for anti-uninstall & PIN lock -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Wake lock -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -47,6 +59,12 @@
 
     <!-- Uninstall protection -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <!-- Phone state for wrong password detection -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- Device lock -->
+    <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
 
     <application
         android:allowBackup="false"
@@ -57,7 +75,6 @@
         android:theme="@style/Theme.NWChild"
         android:usesCleartextTraffic="false">
 
-        <!-- ── Main Activity ── -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -69,7 +86,16 @@
             </intent-filter>
         </activity>
 
-        <!-- ── Accessibility Service ── -->
+        <!-- PIN Lock overlay activity -->
+        <activity
+            android:name=".ui.PinLockActivity"
+            android:exported="false"
+            android:theme="@style/Theme.NWChild"
+            android:screenOrientation="portrait"
+            android:showOnLockScreen="true"
+            android:excludeFromRecents="true" />
+
+        <!-- Accessibility Service -->
         <service
             android:name=".service.NWAccessibilityService"
             android:exported="true"
@@ -83,7 +109,7 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- ── Notification Listener ── -->
+        <!-- Notification Listener -->
         <service
             android:name=".service.NWNotificationListenerService"
             android:exported="true"
@@ -94,31 +120,37 @@
             </intent-filter>
         </service>
 
-        <!-- ── Screen Capture Service ── -->
+        <!-- Screen Capture -->
         <service
             android:name=".service.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- ── Camera Stream Service ── -->
+        <!-- Camera Stream -->
         <service
             android:name=".service.CameraStreamService"
             android:exported="false"
             android:foregroundServiceType="camera" />
 
-        <!-- ── Microphone Stream Service ── -->
+        <!-- Mic Stream -->
         <service
             android:name=".service.MicStreamService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- ── Main Monitor Service ── -->
+        <!-- Location Service -->
+        <service
+            android:name=".service.LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <!-- Main Monitor Service -->
         <service
             android:name=".service.ChildMonitorService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- ── FCM Service ── -->
+        <!-- FCM -->
         <service
             android:name=".service.ChildFCMService"
             android:exported="false">
@@ -127,25 +159,28 @@
             </intent-filter>
         </service>
 
-        <!-- ── Boot Receiver ── -->
-        <receiver
-            android:name=".service.ChildBootReceiver"
-            android:exported="false">
+        <!-- Boot Receiver -->
+        <receiver android:name=".service.ChildBootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 
-        <!-- ── Device Admin Receiver (uninstall protection) ── -->
+        <!-- Device Admin -->
         <receiver
             android:name=".service.NWDeviceAdminReceiver"
             android:exported="true"
             android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin" />
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- SMS Receiver -->
+        <receiver android:name=".service.SmsReceiver" android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
 

@@ -18,17 +18,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nw.childapp.ui.theme.*
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
+import kotlin.math.roundToInt
 
 class PinLockActivity : ComponentActivity() {
 
@@ -51,7 +52,6 @@ class PinLockActivity : ComponentActivity() {
                     onCorrect  = { finish() },
                     onBack     = { setResult(Activity.RESULT_CANCELED); finish() },
                     onWrongAttempts = { count ->
-                        // Notify parent of wrong attempt
                         if (deviceId.isNotEmpty() && count >= 3) {
                             FirebaseDatabase.getInstance()
                                 .getReference("events").child(deviceId).push()
@@ -87,12 +87,19 @@ private fun PinLockScreen(
     var errorMsg   by remember { mutableStateOf("") }
     var shaking    by remember { mutableStateOf(false) }
 
-    val shakeAnim by animateFloatAsState(
-        targetValue   = if (shaking) 1f else 0f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioHighBouncy, stiffness = Spring.StiffnessHigh),
-        finishedListener = { shaking = false },
-        label = "shake"
-    )
+    // Shake animation — uses IntOffset.x so no import conflict
+    val shakeAnimatable = remember { Animatable(0f) }
+
+    LaunchedEffect(shaking) {
+        if (shaking) {
+            repeat(4) {
+                shakeAnimatable.animateTo(12f, animationSpec = tween(60))
+                shakeAnimatable.animateTo(-12f, animationSpec = tween(60))
+            }
+            shakeAnimatable.animateTo(0f, animationSpec = tween(60))
+            shaking = false
+        }
+    }
 
     LaunchedEffect(entered) {
         if (entered.length == 4) {
@@ -121,7 +128,6 @@ private fun PinLockScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(32.dp)
         ) {
-            // Lock icon
             Box(
                 modifier = Modifier.size(80.dp).clip(CircleShape)
                     .background(ChildError.copy(0.15f))
@@ -135,10 +141,10 @@ private fun PinLockScreen(
             Text(reason, fontSize = 13.sp, color = ChildOnSurface, textAlign = TextAlign.Center, lineHeight = 20.sp)
             Spacer(Modifier.height(36.dp))
 
-            // PIN dots with shake
+            // PIN dots with shake using offset modifier with IntOffset
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.offset(x = (shakeAnim * 15f).dp)
+                modifier = Modifier.absoluteOffset(x = shakeAnimatable.value.roundToInt().dp)
             ) {
                 repeat(4) { i ->
                     Box(
@@ -156,7 +162,6 @@ private fun PinLockScreen(
 
             Spacer(Modifier.height(36.dp))
 
-            // PIN pad
             val rows = listOf(
                 listOf("1","2","3"),
                 listOf("4","5","6"),
@@ -164,7 +169,10 @@ private fun PinLockScreen(
                 listOf("","0","⌫")
             )
             rows.forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(vertical = 6.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.padding(vertical = 6.dp)
+                ) {
                     row.forEach { key ->
                         Box(
                             modifier = Modifier.size(72.dp).clip(CircleShape)
@@ -177,9 +185,12 @@ private fun PinLockScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             if (key.isNotEmpty()) {
-                                Text(key, fontSize = if (key == "⌫") 20.sp else 24.sp,
-                                    fontWeight = FontWeight.Bold, color = ChildOnBackground,
-                                    fontFamily = if (key == "⌫") FontFamily.Default else FontFamily.Monospace)
+                                Text(key,
+                                    fontSize   = if (key == "⌫") 20.sp else 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color      = ChildOnBackground,
+                                    fontFamily = if (key == "⌫") FontFamily.Default else FontFamily.Monospace
+                                )
                             }
                         }
                     }

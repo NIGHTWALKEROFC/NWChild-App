@@ -1,10 +1,7 @@
 // PATH: app/src/main/java/com/nw/childapp/ui/screens/PermissionsScreen.kt
 package com.nw.childapp.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
-import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -23,7 +20,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -40,8 +36,7 @@ fun PermissionsScreen(
     onRequestRuntimePermissions: (Array<String>) -> Unit,
     onOpenSettings: (String) -> Unit
 ) {
-    val uiState  by viewModel.uiState.collectAsState()
-    val context  = LocalContext.current
+    val uiState by viewModel.uiState.collectAsState()
     var showAccessibilityGuide by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.allPermissionsGranted) {
@@ -53,10 +48,9 @@ fun PermissionsScreen(
     val total   = PermissionItem.values().size
     val granted = total - missing.size
 
-    // Accessibility step-by-step guide dialog
     if (showAccessibilityGuide) {
         AccessibilityGuideDialog(
-            onDismiss = { showAccessibilityGuide = false },
+            onDismiss     = { showAccessibilityGuide = false },
             onOpenSettings = {
                 showAccessibilityGuide = false
                 onOpenSettings("accessibility")
@@ -65,19 +59,16 @@ fun PermissionsScreen(
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = Modifier.fillMaxSize()
             .background(Brush.verticalGradient(listOf(ChildBackground, Color(0xFF040D04))))
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
+            modifier = Modifier.fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
         ) {
             Spacer(Modifier.height(52.dp))
 
-            // Header
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier.size(46.dp).clip(CircleShape)
@@ -94,7 +85,6 @@ fun PermissionsScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Progress card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape    = RoundedCornerShape(16.dp),
@@ -103,12 +93,8 @@ fun PermissionsScreen(
                 Column(Modifier.padding(16.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Permissions granted", fontSize = 13.sp, color = ChildOnSurface)
-                        Text(
-                            "$granted / $total",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (missing.isEmpty()) ChildSuccess else ChildWarning
-                        )
+                        Text("$granted / $total", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = if (missing.isEmpty()) ChildSuccess else ChildWarning)
                     }
                     Spacer(Modifier.height(10.dp))
                     LinearProgressIndicator(
@@ -122,7 +108,6 @@ fun PermissionsScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Missing permissions
             if (missing.isNotEmpty()) {
                 Text("Still needed", fontSize = 13.sp, fontWeight = FontWeight.Bold,
                     color = ChildError, letterSpacing = 1.sp)
@@ -133,7 +118,6 @@ fun PermissionsScreen(
                         isGranted = false,
                         onGrant   = {
                             if (item == PermissionItem.ACCESSIBILITY) {
-                                // Show step-by-step guide instead of just opening settings
                                 showAccessibilityGuide = true
                             } else {
                                 grantItem(item, onRequestRuntimePermissions, onOpenSettings)
@@ -144,7 +128,6 @@ fun PermissionsScreen(
                 }
             }
 
-            // Granted permissions
             AnimatedVisibility(visible = granted > 0, enter = fadeIn(tween(400)), exit = fadeOut()) {
                 Column {
                     Spacer(Modifier.height(8.dp))
@@ -162,7 +145,6 @@ fun PermissionsScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Refresh & Continue button
             Button(
                 onClick  = { viewModel.refreshPermissions() },
                 modifier = Modifier.fillMaxWidth().height(54.dp),
@@ -176,9 +158,9 @@ fun PermissionsScreen(
                     tint = if (missing.isEmpty()) Color(0xFF003300) else ChildAccent)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (missing.isEmpty()) "All done — Continue" else "Refresh Permissions",
+                    text       = if (missing.isEmpty()) "All done — Continue" else "Refresh Permissions",
                     fontWeight = FontWeight.Bold,
-                    color = if (missing.isEmpty()) Color(0xFF003300) else ChildOnBackground
+                    color      = if (missing.isEmpty()) Color(0xFF003300) else ChildOnBackground
                 )
             }
 
@@ -187,67 +169,39 @@ fun PermissionsScreen(
     }
 }
 
-// ── Accessibility step-by-step guide dialog ───────────────────────────
+// ── Accessibility guide dialog ────────────────────────────────────────
 @Composable
 private fun AccessibilityGuideDialog(
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape  = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = ChildCard)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(
-                    Icons.Default.Accessibility,
-                    null,
-                    tint     = ChildAccent,
-                    modifier = Modifier.size(44.dp)
-                )
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = ChildCard)) {
+            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Accessibility, null, tint = ChildAccent, modifier = Modifier.size(44.dp))
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    "Enable Accessibility",
-                    fontSize     = 18.sp,
-                    fontWeight   = FontWeight.Bold,
-                    color        = ChildOnBackground,
-                    textAlign    = TextAlign.Center
-                )
+                Text("Enable Accessibility", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    color = ChildOnBackground, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
 
-                // Step by step instructions
-                val steps = listOf(
+                listOf(
                     "Tap \"Open Settings\" below",
                     "Find and tap \"NW Child Monitor\"",
                     "Toggle the switch to ON",
                     "Tap \"Allow\" on the confirmation",
-                    "Come back here and tap Refresh"
-                )
-
-                steps.forEachIndexed { index, step ->
+                    "Come back and tap Refresh"
+                ).forEachIndexed { index, step ->
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 5.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
+                            modifier = Modifier.size(28.dp).clip(CircleShape)
                                 .background(ChildAccent.copy(0.2f))
                                 .border(1.dp, ChildAccent.copy(0.5f), CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "${index + 1}",
-                                fontSize   = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color      = ChildAccent
-                            )
+                            Text("${index + 1}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ChildAccent)
                         }
                         Spacer(Modifier.width(12.dp))
                         Text(step, fontSize = 13.sp, color = ChildOnBackground)
@@ -256,7 +210,6 @@ private fun AccessibilityGuideDialog(
 
                 Spacer(Modifier.height(8.dp))
 
-                // Note about restricted settings on Android 13+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape    = RoundedCornerShape(10.dp),
@@ -268,9 +221,7 @@ private fun AccessibilityGuideDialog(
                         Spacer(Modifier.width(8.dp))
                         Text(
                             "If you see \"Restricted setting\" — go to Settings → Apps → NW Child → tap ⋮ menu → Allow restricted settings. Then come back.",
-                            fontSize    = 11.sp,
-                            color       = ChildWarning,
-                            lineHeight  = 16.sp
+                            fontSize = 11.sp, color = ChildWarning, lineHeight = 16.sp
                         )
                     }
                 }
@@ -289,7 +240,6 @@ private fun AccessibilityGuideDialog(
                 }
 
                 Spacer(Modifier.height(8.dp))
-
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Cancel", color = ChildOnSurface)
                 }
@@ -311,6 +261,15 @@ private fun grantItem(
             requestRuntime(arrayOf(android.Manifest.permission.RECORD_AUDIO))
         PermissionItem.CONTACTS ->
             requestRuntime(arrayOf(android.Manifest.permission.READ_CONTACTS))
+        PermissionItem.CALL_LOG ->
+            requestRuntime(arrayOf(android.Manifest.permission.READ_CALL_LOG))
+        PermissionItem.SMS ->
+            requestRuntime(arrayOf(android.Manifest.permission.READ_SMS))
+        PermissionItem.LOCATION ->
+            requestRuntime(arrayOf(
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
         PermissionItem.STORAGE -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 requestRuntime(arrayOf(
@@ -322,10 +281,11 @@ private fun grantItem(
                 requestRuntime(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE))
             }
         }
-        PermissionItem.NOTIFICATIONS -> openSettings("notification_listener")
-        PermissionItem.ACCESSIBILITY -> openSettings("accessibility")
-        PermissionItem.USAGE_STATS   -> openSettings("usage_access")
-        PermissionItem.SCREEN_SHARE  -> { /* MediaProjection at runtime */ }
+        PermissionItem.NOTIFICATIONS  -> openSettings("notification_listener")
+        PermissionItem.ACCESSIBILITY  -> openSettings("accessibility")
+        PermissionItem.USAGE_STATS    -> openSettings("usage_access")
+        PermissionItem.OVERLAY        -> openSettings("overlay")
+        PermissionItem.SCREEN_SHARE   -> { /* MediaProjection at runtime */ }
     }
 }
 
@@ -345,6 +305,16 @@ private fun PermCard(
         PermissionItem.CONTACTS      -> Icons.Default.Contacts
         PermissionItem.ACCESSIBILITY -> Icons.Default.Accessibility
         PermissionItem.USAGE_STATS   -> Icons.Default.BarChart
+        PermissionItem.CALL_LOG      -> Icons.Default.Call
+        PermissionItem.SMS           -> Icons.Default.Message
+        PermissionItem.LOCATION      -> Icons.Default.LocationOn
+        PermissionItem.OVERLAY       -> Icons.Default.Layers
+    }
+
+    val hint: String? = when {
+        !isGranted && item == PermissionItem.ACCESSIBILITY  -> "→ Step-by-step guide provided"
+        !isGranted && item.requiresSettings                 -> "→ Opens system settings"
+        else                                                -> null
     }
 
     Card(
@@ -353,43 +323,28 @@ private fun PermCard(
         colors   = CardDefaults.cardColors(
             containerColor = if (isGranted) ChildSuccess.copy(0.1f) else ChildCard
         ),
-        border = BorderStroke(
-            1.dp,
-            if (isGranted) ChildSuccess.copy(0.4f) else ChildError.copy(0.3f)
-        )
+        border = BorderStroke(1.dp, if (isGranted) ChildSuccess.copy(0.4f) else ChildError.copy(0.3f))
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier.size(42.dp).clip(CircleShape)
-                    .background(
-                        if (isGranted) ChildSuccess.copy(0.14f) else ChildError.copy(0.14f)
-                    ),
+                    .background(if (isGranted) ChildSuccess.copy(0.14f) else ChildError.copy(0.14f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(icon, null,
-                    tint = if (isGranted) ChildSuccess else ChildError,
+                    tint     = if (isGranted) ChildSuccess else ChildError,
                     modifier = Modifier.size(22.dp))
             }
-
             Spacer(Modifier.width(12.dp))
-
             Column(Modifier.weight(1f)) {
                 Text(item.label, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ChildOnBackground)
                 Text(item.description, fontSize = 11.sp, color = ChildOnSurface)
-                if (!isGranted) {
-                    when (item) {
-                        PermissionItem.ACCESSIBILITY ->
-                            Text("→ Step-by-step guide provided", fontSize = 10.sp, color = ChildAccent)
-                        PermissionItem.NOTIFICATIONS, PermissionItem.USAGE_STATS ->
-                            Text("→ Opens system settings", fontSize = 10.sp, color = ChildWarning)
-                        else -> {}
-                    }
+                if (hint != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(hint, fontSize = 10.sp,
+                        color = if (item == PermissionItem.ACCESSIBILITY) ChildAccent else ChildWarning)
                 }
             }
-
             if (!isGranted) {
                 Spacer(Modifier.width(10.dp))
                 Button(
